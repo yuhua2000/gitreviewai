@@ -1,5 +1,9 @@
 # GitReviewAI 🚀
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev/)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://www.docker.com/)
+
 基于 AI 的 GitLab Merge Request 代码审查工具。
 
 ## 🙌 致谢
