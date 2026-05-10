@@ -21,21 +21,12 @@
 
 ## 🏗️ 架构设计
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│ GitLab MR   │────▶│  Webhook    │────▶│  Reviewer   │
-│   Event     │     │   Handler   │     │   Engine    │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                               │
-                       ┌─────────────┐         │
-                       │   GitLab    │◀───────┤
-                       │    API      │         │
-                       └─────────────┘         │
-                                               │
-                       ┌─────────────┐         │
-                       │ OpenAI API  │◀───────┘
-                       │  (MiMo/GPT) │
-                       └─────────────┘
+```mermaid
+flowchart LR
+    A[GitLab MR Event] --> B[Webhook Handler]
+    B --> C[Reviewer Engine]
+    C --> D[GitLab API]
+    C --> E[OpenAI API<br/>MiMo/GPT]
 ```
 
 ## 🚀 快速开始
