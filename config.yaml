@@ -1,0 +1,88 @@
+# --------------------------------
+# GitLab 配置
+# --------------------------------
+# GitLab 服务器地址
+# 私有化部署请修改为对应的地址，如 https://gitlab.company.com
+gitlab_url: "https://gitlab.com"
+
+# GitLab Personal Access Token
+# 获取方式: GitLab → User Settings → Access Tokens → Add new token
+# 需要的权限: api (访问 Merge Requests 和提交评论)
+# ⚠️ 安全提示: 请勿将真实 Token 提交到代码仓库
+gitlab_token: "glpat-your-gitlab-token-here"
+
+# --------------------------------
+# OpenAI / AI 模型配置
+# --------------------------------
+# API Key
+# 支持 OpenAI 或其他兼容 OpenAI API 格式的服务
+# ⚠️ 安全提示: 请勿将真实 API Key 提交到代码仓库
+openai_api_key: "sk-your-api-key-here"
+
+# 模型名称
+# 推荐: gpt-4o (效果最佳), gpt-4, gpt-3.5-turbo (成本较低)
+openai_model: "gpt-4o"
+
+# API 基础地址
+# OpenAI 官方: https://api.openai.com/v1
+# Azure OpenAI: https://your-resource.openai.azure.com/openai/deployments/your-deployment
+# 第三方代理: 根据服务商提供的地址填写
+openai_base_url: "https://api.openai.com/v1"
+
+# --------------------------------
+# 服务配置
+# --------------------------------
+# HTTP 服务端口
+# 用于接收 GitLab Webhook 请求
+port: 8080
+
+# GitLab Webhook Secret Token (可选)
+# 用于验证 Webhook 请求的合法性
+# 在 GitLab 项目 Settings → Webhooks 中设置
+webhook_token: "your-webhook-secret"
+
+# --------------------------------
+# 审核配置
+# --------------------------------
+# 单个 MR 最大行级评论数量
+# 防止 AI 生成过多评论刷屏，建议 30-100
+max_line_comments: 50
+
+# 忽略的文件/目录列表
+# 支持通配符匹配，以下文件类型会被跳过审核
+ignore_paths:
+  # 版本控制
+  - ".git"
+  # 依赖目录
+  - "vendor"
+  - "node_modules"
+  # 构建输出
+  - "dist"
+  - "build"
+  - "target"
+  # 自动生成代码
+  - "*.pb.go"      # protobuf 生成
+  - "*.pb.gw.go"   # grpc gateway 生成
+  - "*_gen.go"     # 其他生成代码
+  - "generated"
+  # 配置文件（审核价值较低）
+  - "*.yaml"
+  - "*.yml"
+  - "*.json"
+  - "go.mod"
+  - "go.sum"
+  - "package-lock.json"
+  - "yarn.lock"
+  # 测试数据
+  - "testdata"
+  - "fixtures"
+
+# --------------------------------
+# 日志配置
+# --------------------------------
+# 日志级别: debug / info / warn / error
+# debug: 显示所有日志，包括 AI 请求详情
+# info:  显示正常运行的关键信息
+# warn:  只显示警告和错误
+# error: 只显示错误
+log_level: "info"
