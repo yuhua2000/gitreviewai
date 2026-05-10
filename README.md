@@ -22,14 +22,14 @@
 │ GitLab MR   │────▶│  Webhook    │────▶│  Reviewer   │
 │   Event     │     │   Handler   │     │   Engine    │
 └─────────────┘     └─────────────┘     └──────┬──────┘
-                                                │
+                                               │
                        ┌─────────────┐         │
-                       │   GitLab    │◀────────┤
+                       │   GitLab    │◀───────┤
                        │    API      │         │
                        └─────────────┘         │
-                                                │
+                                               │
                        ┌─────────────┐         │
-                       │ OpenAI API  │◀────────┘
+                       │ OpenAI API  │◀───────┘
                        │  (MiMo/GPT) │
                        └─────────────┘
 ```
@@ -79,6 +79,7 @@ vi config.yaml
 # 运行服务
 go run cmd/server/main.go
 ```
+---
 
 ## 使用Docker运行
 
@@ -131,6 +132,39 @@ port: 8080
 ```
 
 服务启动后，即可在 GitLab 项目中配置 Webhook 指向 `http://你的IP:8080/webhook`。
+
+---
+
+## GitLab Webhook 配置
+
+### 1. 在GitLab中添加Webhook
+
+1. 进入您的GitLab项目页面
+2. 导航到 **Settings** → **Webhooks**
+3. 在 **URL** 字段中输入您的GitReviewAI服务地址：
+   ```
+   http://your-domain.com/webhook
+   ```
+4. 在 **Secret token** 字段中输入您在 `config.yaml` 中配置的密钥（如果已设置）
+5. 选择触发事件：
+   - [x] **Merge requests events**
+6. 取消勾选 **Enable SSL verification**（如果使用HTTPS且证书有效）
+7. 点击 **Add webhook**
+
+### 2. 验证Webhook配置
+
+1. 添加完成后，找到刚创建的Webhook
+2. 点击 **Test** 按钮测试连接
+3. 查看 **Recent deliveries** 确认请求是否成功发送
+
+### 3. 注意事项
+
+- 确保您的GitReviewAI服务可以通过公网访问
+- 如果使用防火墙，请开放相应的端口
+- 建议使用HTTPS以保证通信安全
+- Webhook URL应指向 `/webhook` 路径
+
+---
 
 ## 📊 审查报告示例
 
