@@ -40,7 +40,7 @@ flowchart LR
 
 ### 1. 环境要求
 
-- Go 1.21+
+- Go 1.25+
 - Node.js 18+（构建前端，仅开发/构建时需要）
 - GitLab 账号（需配置 API Token）
 - OpenAI 兼容的 API（支持自定义基础 URL）
