@@ -59,3 +59,17 @@ go.work
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/go,linux,visualstudiocode
+
+# Database
+data/
+*.db
+
+# Frontend
+internal/api/frontend/node_modules/
+internal/api/frontend/dist/
+
+# Binary
+gitreviewai
+
+# Config (local)
+config.yaml

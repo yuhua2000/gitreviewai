@@ -86,3 +86,18 @@ ignore_paths:
 # warn:  只显示警告和错误
 # error: 只显示错误
 log_level: "info"
+
+# --------------------------------
+# Auth 配置 (Phase 2)
+# --------------------------------
+# 登录密码（必填）
+password: "your-login-password"
+
+# JWT 签名密钥（必填，建议使用随机生成的长字符串，至少 32 字符）
+jwt_secret: "your-jwt-secret-key-at-least-32-chars"
+
+# JWT 过期时间（可选，默认 24h）
+jwt_expiry: "24h"
+
+# 数据库文件路径（可选，默认 ./data/gitreviewai.db）
+db_path: "./data/gitreviewai.db"

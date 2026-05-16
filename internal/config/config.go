@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +27,12 @@ type Config struct {
 	IgnorePaths     []string `yaml:"ignore_paths"`
 
 	LogLevel string `yaml:"log_level"`
+
+	// Auth 配置 (Phase 2)
+	Password  string `yaml:"password"`
+	JWTSecret string `yaml:"jwt_secret"`
+	JWTExpiry string `yaml:"jwt_expiry"`
+	DBPath    string `yaml:"db_path"`
 }
 
 func Load(path string) (*Config, error) {
@@ -42,6 +49,8 @@ func Load(path string) (*Config, error) {
 		MaxLineComments: 50,
 		IgnorePaths:     []string{".git", "vendor", "node_modules"},
 		LogLevel:        "info",
+		JWTExpiry:       "24h",
+		DBPath:          "./data/gitreviewai.db",
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
@@ -49,4 +58,12 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func (c *Config) JWTExpiryDuration() time.Duration {
+	d, err := time.ParseDuration(c.JWTExpiry)
+	if err != nil {
+		return 24 * time.Hour
+	}
+	return d
 }

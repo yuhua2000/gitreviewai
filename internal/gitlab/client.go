@@ -115,10 +115,18 @@ func (c *Client) GetMRChanges(ctx context.Context, projectID string, mrIID int) 
 	return fullResp.Changes, fullResp.DiffRefs, nil
 }
 
-func (c *Client) PostMRNote(ctx context.Context, projectID string, mrIID int, body string) error {
+type MRNoteResult struct {
+	ID int `json:"id"`
+}
+
+func (c *Client) PostMRNote(ctx context.Context, projectID string, mrIID int, body string) (int, error) {
 	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%d/notes", url.PathEscape(projectID), mrIID)
 	payload := map[string]string{"body": body}
-	return c.post(ctx, path, payload, nil)
+	var result MRNoteResult
+	if err := c.post(ctx, path, payload, &result); err != nil {
+		return 0, err
+	}
+	return result.ID, nil
 }
 
 func (c *Client) CreateDraftNote(ctx context.Context, projectID string, mrIID int, note DraftNote) (int, error) {

@@ -35,10 +35,10 @@ type ObjectAttr struct {
 	Title  string `json:"title"`
 }
 
-func NewHandler(cfg *config.Config) *Handler {
+func NewHandler(cfg *config.Config, rev *reviewer.Reviewer) *Handler {
 	return &Handler{
 		cfg:      cfg,
-		reviewer: reviewer.New(cfg),
+		reviewer: rev,
 	}
 }
 

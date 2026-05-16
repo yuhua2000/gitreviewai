@@ -2,6 +2,7 @@ package reviewer
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,36 +12,43 @@ import (
 
 	"github.com/yuhua2000/gitreviewai/internal/ai"
 	"github.com/yuhua2000/gitreviewai/internal/config"
+	"github.com/yuhua2000/gitreviewai/internal/database"
 	"github.com/yuhua2000/gitreviewai/internal/gitlab"
 )
 
 type Reviewer struct {
-	cfg      *config.Config
-	glClient *gitlab.Client
-	aiClient *ai.Client
+	cfg          *config.Config
+	glClient     *gitlab.Client
+	aiClient     *ai.Client
+	mrStore      *database.MRStore
+	commentStore *database.CommentStore
+	reportStore  *database.ReportStore
+	settingStore *database.SettingStore
 }
 
-// reviewState holds the state shared across tool calls during a review
 type reviewState struct {
 	projectID      string
 	sourceBranch   string
 	changes        []gitlab.MRChange
-	changesSent    int // number of changes sent to AI
+	changesSent    int
 	lineComments   []ai.LineCommentResult
 	reviewComments []string
 	report         string
 	finished       bool
 }
 
-func New(cfg *config.Config) *Reviewer {
+func New(cfg *config.Config, db *sql.DB) *Reviewer {
 	return &Reviewer{
-		cfg:      cfg,
-		glClient: gitlab.NewClient(cfg.GitLabURL, cfg.GitLabToken),
-		aiClient: ai.NewClient(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL),
+		cfg:          cfg,
+		glClient:     gitlab.NewClient(cfg.GitLabURL, cfg.GitLabToken),
+		aiClient:     ai.NewClient(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL),
+		mrStore:      database.NewMRStore(db),
+		commentStore: database.NewCommentStore(db),
+		reportStore:  database.NewReportStore(db),
+		settingStore: database.NewSettingStore(db),
 	}
 }
 
-// ReviewMR reviews a Merge Request
 func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) error {
 	slog.Info("review started", "project", projectID, "mr_iid", mrIID)
 
@@ -51,33 +59,53 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	}
 	slog.Info("MR info retrieved", "title", mrInfo.Title, "state", mrInfo.State)
 
-	// 2. Get MR changes
+	// 2. Upsert MR into database
+	mrRecord := &database.MergeRequest{
+		ProjectID:    projectID,
+		MRIID:        mrIID,
+		Title:        mrInfo.Title,
+		Description:  mrInfo.Description,
+		SourceBranch: mrInfo.SourceBranch,
+		TargetBranch: mrInfo.TargetBranch,
+		State:        mrInfo.State,
+		WebURL:       mrInfo.WebURL,
+		ReviewStatus: "reviewing",
+	}
+	mrID, err := r.mrStore.Upsert(ctx, mrRecord)
+	if err != nil {
+		slog.Error("failed to upsert MR", "error", err)
+		return fmt.Errorf("failed to upsert MR: %w", err)
+	}
+	slog.Info("MR persisted to database", "mr_id", mrID)
+
+	// 3. Get MR changes
 	changes, diffRefs, err := r.glClient.GetMRChanges(ctx, projectID, mrIID)
 	if err != nil {
+		r.mrStore.UpdateReviewStatus(ctx, mrID, "failed")
 		return fmt.Errorf("failed to get MR changes: %w", err)
 	}
 	slog.Info("found changed files", "count", len(changes))
 
-	// 3. Filter changes
+	// 4. Filter changes
 	filteredChanges := r.filterChanges(changes)
 	slog.Info("files to review after filtering", "count", len(filteredChanges))
 
-	// 4. Initialize review state
+	// 5. Initialize review state
 	state := &reviewState{
 		projectID:    projectID,
 		sourceBranch: mrInfo.SourceBranch,
 		changes:      filteredChanges,
 	}
 
-	// 5. Prepare initial changes summary (batched)
+	// 6. Prepare initial changes summary
 	initialSummary, remaining := r.formatInitialChangesSummary(filteredChanges, 10)
 
-	// 6. Prepare tool handler
+	// 7. Prepare tool handler
 	toolHandler := func(name string, args json.RawMessage) (string, error) {
 		return r.handleToolCall(ctx, state, name, args)
 	}
 
-	// 7. Build initial message
+	// 8. Build initial message
 	initialMessage := ai.FormatInitialMessage(
 		mrInfo.Title,
 		mrInfo.Description,
@@ -91,25 +119,184 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 			state.changesSent, remaining)
 	}
 
-	// 8. Execute AI review (50 iterations max)
+	// 9. Execute AI review
 	response, err := r.aiClient.ChatWithLimit(ctx, ai.SystemPrompt(), initialMessage, toolHandler, 50)
 	if err != nil {
+		r.mrStore.UpdateReviewStatus(ctx, mrID, "failed")
 		return fmt.Errorf("AI review failed: %w", err)
 	}
 	slog.Info("AI review completed", "response_length", len(response))
 
-	// 9. Submit results to GitLab
-	if err := r.submitResults(ctx, projectID, mrIID, diffRefs, state); err != nil {
-		return fmt.Errorf("failed to submit results: %w", err)
+	// 10. Persist results to database
+	autoSubmit, _ := r.settingStore.GetAutoSubmit(ctx)
+
+	lineComments := state.lineComments
+	if len(lineComments) > r.cfg.MaxLineComments {
+		slog.Warn("line comments exceed limit, truncating", "total", len(lineComments), "max", r.cfg.MaxLineComments)
+		lineComments = lineComments[:r.cfg.MaxLineComments]
 	}
+
+	// Build diff map for context extraction
+	diffMap := make(map[string]string)
+	for _, change := range filteredChanges {
+		diffMap[change.NewPath] = change.Diff
+	}
+
+	// 10a. Persist line comments
+	for _, lc := range lineComments {
+		diffContext := ExtractDiffContext(diffMap[lc.File], lc.Line, 8)
+		comment := &database.Comment{
+			MRID:        mrID,
+			CommentType: "line",
+			FilePath:    lc.File,
+			LineNumber:  lc.Line,
+			Content:     lc.Message,
+			DiffContext: diffContext,
+			Status:      "pending",
+		}
+		commentID, err := r.commentStore.Create(ctx, comment)
+		if err != nil {
+			slog.Error("failed to create line comment", "error", err)
+			continue
+		}
+		comment.ID = commentID
+
+		if autoSubmit {
+			r.submitSingleLineComment(ctx, projectID, mrIID, diffRefs, lc, commentID)
+		}
+	}
+
+	// 10b. Persist review comments
+	for _, rc := range state.reviewComments {
+		comment := &database.Comment{
+			MRID:        mrID,
+			CommentType: "review",
+			Content:     rc,
+			Status:      "pending",
+		}
+		commentID, err := r.commentStore.Create(ctx, comment)
+		if err != nil {
+			slog.Error("failed to create review comment", "error", err)
+			continue
+		}
+		comment.ID = commentID
+
+		if autoSubmit {
+			r.submitSingleReviewComment(ctx, projectID, mrIID, rc, commentID)
+		}
+	}
+
+	// 10c. Persist report
+	if state.report != "" {
+		report := &database.Report{
+			MRID:    mrID,
+			Content: state.report,
+			Status:  "pending",
+		}
+		reportID, err := r.reportStore.Create(ctx, report)
+		if err != nil {
+			slog.Error("failed to create report", "error", err)
+		} else {
+			if autoSubmit {
+				r.submitSingleReport(ctx, projectID, mrIID, state.report, reportID)
+			}
+		}
+	}
+
+	// 11. Update MR status
+	r.mrStore.UpdateReviewStatus(ctx, mrID, "completed")
 
 	slog.Info("review completed",
 		"project", projectID,
 		"mr_iid", mrIID,
-		"line_comments", len(state.lineComments),
-		"review_comments", len(state.reviewComments))
+		"mr_id", mrID,
+		"line_comments", len(lineComments),
+		"review_comments", len(state.reviewComments),
+		"auto_submit", autoSubmit)
 
 	return nil
+}
+
+func (r *Reviewer) submitSingleLineComment(ctx context.Context, projectID string, mrIID int,
+	diffRefs *gitlab.DiffRefs, comment ai.LineCommentResult, commentID int64) {
+
+	draft := gitlab.DraftNote{
+		Note: comment.Message,
+		Position: &gitlab.Position{
+			BaseSHA:      diffRefs.BaseSHA,
+			StartSHA:     diffRefs.StartSHA,
+			HeadSHA:      diffRefs.HeadSHA,
+			PositionType: "text",
+			NewPath:      comment.File,
+			OldPath:      comment.File,
+			NewLine:      comment.Line,
+		},
+	}
+	draftID, err := r.glClient.CreateDraftNote(ctx, projectID, mrIID, draft)
+	if err != nil {
+		slog.Error("failed to create draft note", "file", comment.File, "line", comment.Line, "error", err)
+		return
+	}
+
+	if err := r.glClient.PublishDraftNote(ctx, projectID, mrIID, draftID); err != nil {
+		slog.Error("failed to publish draft note", "file", comment.File, "line", comment.Line, "draft_id", draftID, "error", err)
+		return
+	}
+
+	draftID64 := int64(draftID)
+	r.commentStore.UpdateStatus(ctx, commentID, "submitted", nil, &draftID64)
+	slog.Info("line comment submitted", "file", comment.File, "line", comment.Line, "draft_id", draftID)
+}
+
+func (r *Reviewer) submitSingleReviewComment(ctx context.Context, projectID string, mrIID int,
+	content string, commentID int64) {
+
+	noteID, err := r.glClient.PostMRNote(ctx, projectID, mrIID, content)
+	if err != nil {
+		slog.Error("failed to post review comment", "error", err)
+		return
+	}
+
+	noteID64 := int64(noteID)
+	r.commentStore.UpdateStatus(ctx, commentID, "submitted", &noteID64, nil)
+	slog.Info("review comment submitted", "note_id", noteID)
+}
+
+func (r *Reviewer) submitSingleReport(ctx context.Context, projectID string, mrIID int,
+	content string, reportID int64) {
+
+	reportBody := fmt.Sprintf(`# MR 审核报告
+
+**审核时间:** %s
+
+---
+
+%s
+
+---
+*此报告由 GitReviewAI 自动生成，供开发者参考。*`,
+		time.Now().Format("2006-01-02 15:04:05"),
+		content)
+
+	noteID, err := r.glClient.PostMRNote(ctx, projectID, mrIID, reportBody)
+	if err != nil {
+		slog.Error("failed to post report", "error", err)
+		return
+	}
+
+	noteID64 := int64(noteID)
+	r.reportStore.UpdateStatus(ctx, reportID, "submitted", &noteID64)
+	slog.Info("report submitted", "note_id", noteID)
+}
+
+// GetStores returns the database stores for use by API handlers
+func (r *Reviewer) GetStores() (*database.MRStore, *database.CommentStore, *database.ReportStore, *database.SettingStore) {
+	return r.mrStore, r.commentStore, r.reportStore, r.settingStore
+}
+
+// GetGitLabClient returns the GitLab client for use by API handlers
+func (r *Reviewer) GetGitLabClient() *gitlab.Client {
+	return r.glClient
 }
 
 // filterChanges intelligently filters changed files
@@ -123,53 +310,41 @@ func (r *Reviewer) filterChanges(changes []gitlab.MRChange) []gitlab.MRChange {
 		"generated", stats.Generated,
 		"docs", stats.Docs)
 
-	// 如果文件数量较少，全部保留
 	if len(changes) <= 20 {
 		return r.filterByIgnorePaths(changes)
 	}
 
-	// 文件较多时，优先保留业务代码
 	var filtered []gitlab.MRChange
 	for _, change := range changes {
-		// 检查是否在忽略列表中
 		if r.shouldIgnoreByConfig(change.NewPath) {
 			continue
 		}
 
-		// 根据文件类型决定是否保留
 		fileType := r.classifyFile(change.NewPath)
 		switch fileType {
 		case "business":
-			// 业务代码始终保留
 			filtered = append(filtered, change)
 		case "test":
-			// 测试文件只在数量不多时保留
 			if stats.Test <= 10 {
 				filtered = append(filtered, change)
 			}
 		case "config":
-			// 配置文件只在数量不多时保留
 			if stats.Config <= 5 {
 				filtered = append(filtered, change)
 			}
 		case "generated":
-			// 自动生成代码通常忽略
 			if stats.Generated <= 3 {
 				filtered = append(filtered, change)
 			}
 		case "docs":
-			// 文档类文件忽略（非代码）
-			// 但保留 API 文档
 			if strings.Contains(change.NewPath, "api") || strings.Contains(change.NewPath, "swagger") {
 				filtered = append(filtered, change)
 			}
 		default:
-			// 其他文件保留
 			filtered = append(filtered, change)
 		}
 	}
 
-	// 如果过滤后文件太少，放宽限制
 	if len(filtered) < 5 {
 		return r.filterByIgnorePaths(changes)
 	}
@@ -177,7 +352,6 @@ func (r *Reviewer) filterChanges(changes []gitlab.MRChange) []gitlab.MRChange {
 	return filtered
 }
 
-// ChangeStats holds file type statistics
 type ChangeStats struct {
 	Business  int
 	Test      int
@@ -187,7 +361,6 @@ type ChangeStats struct {
 	Other     int
 }
 
-// analyzeChanges analyzes file type statistics
 func (r *Reviewer) analyzeChanges(changes []gitlab.MRChange) ChangeStats {
 	stats := ChangeStats{}
 	for _, change := range changes {
@@ -209,11 +382,9 @@ func (r *Reviewer) analyzeChanges(changes []gitlab.MRChange) ChangeStats {
 	return stats
 }
 
-// classifyFile classifies a file by its type
 func (r *Reviewer) classifyFile(path string) string {
 	lowerPath := strings.ToLower(path)
 
-	// Test files
 	if strings.HasSuffix(lowerPath, "_test.go") ||
 		strings.HasSuffix(lowerPath, ".test.js") ||
 		strings.HasSuffix(lowerPath, ".test.ts") ||
@@ -226,7 +397,6 @@ func (r *Reviewer) classifyFile(path string) string {
 		return "test"
 	}
 
-	// Auto-generated code
 	if strings.HasSuffix(lowerPath, ".pb.go") ||
 		strings.HasSuffix(lowerPath, ".pb.gw.go") ||
 		strings.HasSuffix(lowerPath, "_grpc.pb.go") ||
@@ -238,7 +408,6 @@ func (r *Reviewer) classifyFile(path string) string {
 		return "generated"
 	}
 
-	// Config files
 	if strings.HasSuffix(lowerPath, ".yaml") ||
 		strings.HasSuffix(lowerPath, ".yml") ||
 		strings.HasSuffix(lowerPath, ".json") ||
@@ -257,7 +426,6 @@ func (r *Reviewer) classifyFile(path string) string {
 		return "config"
 	}
 
-	// Documentation files
 	if strings.HasSuffix(lowerPath, ".md") ||
 		strings.HasSuffix(lowerPath, ".rst") ||
 		strings.HasSuffix(lowerPath, ".txt") ||
@@ -266,7 +434,6 @@ func (r *Reviewer) classifyFile(path string) string {
 		return "docs"
 	}
 
-	// Frontend resources
 	if strings.HasSuffix(lowerPath, ".css") ||
 		strings.HasSuffix(lowerPath, ".scss") ||
 		strings.HasSuffix(lowerPath, ".less") ||
@@ -281,7 +448,6 @@ func (r *Reviewer) classifyFile(path string) string {
 	return "business"
 }
 
-// filterByIgnorePaths filters by configured ignore paths
 func (r *Reviewer) filterByIgnorePaths(changes []gitlab.MRChange) []gitlab.MRChange {
 	var filtered []gitlab.MRChange
 	for _, change := range changes {
@@ -292,7 +458,6 @@ func (r *Reviewer) filterByIgnorePaths(changes []gitlab.MRChange) []gitlab.MRCha
 	return filtered
 }
 
-// shouldIgnoreByConfig checks if a path should be ignored based on config
 func (r *Reviewer) shouldIgnoreByConfig(path string) bool {
 	for _, ignorePath := range r.cfg.IgnorePaths {
 		if strings.HasPrefix(path, ignorePath+"/") || path == ignorePath {
@@ -302,7 +467,6 @@ func (r *Reviewer) shouldIgnoreByConfig(path string) bool {
 	return false
 }
 
-// formatInitialChangesSummary formats initial changes summary, returns summary text and remaining file count
 func (r *Reviewer) formatInitialChangesSummary(changes []gitlab.MRChange, maxFiles int) (string, int) {
 	var sb strings.Builder
 	count := 0
@@ -338,7 +502,6 @@ func (r *Reviewer) formatInitialChangesSummary(changes []gitlab.MRChange, maxFil
 	return sb.String(), remaining
 }
 
-// formatMoreChanges formats more changes content
 func (r *Reviewer) formatMoreChanges(state *reviewState, batchSize int) (string, int) {
 	var sb strings.Builder
 	count := 0
@@ -426,9 +589,8 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 		lines := strings.Split(content, "\n")
 		totalLines := len(lines)
 
-		// 截取指定行范围
 		if params.StartLine > 0 || params.EndLine > 0 {
-			start := params.StartLine - 1 // 1-based to 0-based
+			start := params.StartLine - 1
 			if start < 0 {
 				start = 0
 			}
@@ -445,7 +607,6 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 			}
 
 			var sb strings.Builder
-			// 添加行号描述
 			sb.WriteString(fmt.Sprintf("📄 文件: %s\n📍 行号: %d-%d (共 %d 行)\n---\n", params.Path, start+1, end, totalLines))
 			for i := start; i < end && i < totalLines; i++ {
 				if i > start {
@@ -456,11 +617,9 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 			sb.WriteString("\n---")
 			content = sb.String()
 		} else {
-			// 未指定行范围，显示文件总行数
 			content = fmt.Sprintf("📄 文件: %s\n📍 共 %d 行\n---\n%s\n---", params.Path, totalLines, content)
 		}
 
-		// 限制返回长度
 		if len(content) > 15000 {
 			content = content[:15000] + "\n\n... (内容已截断，文件过大)"
 		}
@@ -480,7 +639,6 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 			slog.Warn("FindInFile failed", "path", params.Path, "error", err)
 			return fmt.Sprintf("读取文件失败: %v", err), nil
 		}
-		// 搜索实现
 		var matches []string
 		lines := strings.Split(content, "\n")
 		for i, line := range lines {
@@ -505,7 +663,6 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 			return "", fmt.Errorf("解析参数失败: %w", err)
 		}
 		slog.Debug("GetURL", "url", params.URL)
-		// 使用简单的 HTTP 请求
 		client := &http.Client{Timeout: 15 * time.Second}
 		req, err := http.NewRequestWithContext(ctx, "GET", params.URL, nil)
 		if err != nil {
@@ -517,7 +674,6 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 			return fmt.Sprintf("获取 URL 失败: %v", err), nil
 		}
 		defer resp.Body.Close()
-		// 限制返回长度
 		buf := make([]byte, 8000)
 		n, _ := resp.Body.Read(buf)
 		return string(buf[:n]), nil
@@ -555,93 +711,4 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 		slog.Warn("unknown tool", "name", name)
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
-}
-
-func (r *Reviewer) submitResults(ctx context.Context, projectID string, mrIID int,
-	diffRefs *gitlab.DiffRefs, state *reviewState) error {
-
-	// 限制行级评论数量，避免刷屏
-	lineComments := state.lineComments
-	if len(lineComments) > r.cfg.MaxLineComments {
-		slog.Warn("行级评论数量超过限制，将截断", "total", len(lineComments), "max", r.cfg.MaxLineComments)
-		lineComments = lineComments[:r.cfg.MaxLineComments]
-	}
-
-	// Submit line-level comments as draft notes and publish each one immediately
-	for _, comment := range lineComments {
-		draft := gitlab.DraftNote{
-			Note: comment.Message,
-			Position: &gitlab.Position{
-				BaseSHA:      diffRefs.BaseSHA,
-				StartSHA:     diffRefs.StartSHA,
-				HeadSHA:      diffRefs.HeadSHA,
-				PositionType: "text",
-				NewPath:      comment.File,
-				OldPath:      comment.File,
-				NewLine:      comment.Line,
-			},
-		}
-		draftID, err := r.glClient.CreateDraftNote(ctx, projectID, mrIID, draft)
-		if err != nil {
-			slog.Error("failed to create draft note", "file", comment.File, "line", comment.Line, "error", err)
-			continue
-		}
-		slog.Debug("draft note created", "file", comment.File, "line", comment.Line, "draft_id", draftID)
-
-		// Publish this draft note individually (PUT /draft_notes/:id/publish)
-		if err := r.glClient.PublishDraftNote(ctx, projectID, mrIID, draftID); err != nil {
-			slog.Error("failed to publish draft note", "file", comment.File, "line", comment.Line, "draft_id", draftID, "error", err)
-		} else {
-			slog.Debug("draft note published", "file", comment.File, "line", comment.Line, "draft_id", draftID)
-		}
-	}
-
-	if len(lineComments) > 0 {
-		slog.Info("line comments processed", "count", len(lineComments), "total_generated", len(state.lineComments))
-	}
-
-	// Submit review comments
-	for _, comment := range state.reviewComments {
-		if err := r.glClient.PostMRNote(ctx, projectID, mrIID, comment); err != nil {
-			slog.Error("failed to post review comment", "error", err)
-		} else {
-			slog.Info("review comment posted")
-		}
-	}
-
-	// Submit Markdown report
-	if state.report != "" {
-		// 计算实际提交的行评论数量（可能因限制被截断）
-		submittedLineComments := len(lineComments)
-		if submittedLineComments > r.cfg.MaxLineComments {
-			submittedLineComments = r.cfg.MaxLineComments
-		}
-		generatedLineComments := len(state.lineComments)
-
-		reportBody := fmt.Sprintf(`# MR 审核报告
-
-**审核时间:** %s  
-**行级评论:** %d 条（生成 %d 条）  
-**整体意见:** %d 条  
-
----
-
-%s
-
----
-*此报告由 GitReviewAI 自动生成，供开发者参考。*`,
-			time.Now().Format("2006-01-02 15:04:05"),
-			submittedLineComments,
-			generatedLineComments,
-			len(state.reviewComments),
-			state.report)
-
-		if err := r.glClient.PostMRNote(ctx, projectID, mrIID, reportBody); err != nil {
-			slog.Error("failed to post report", "error", err)
-		} else {
-			slog.Info("review report posted")
-		}
-	}
-
-	return nil
 }

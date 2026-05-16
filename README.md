@@ -1,7 +1,7 @@
 # GitReviewAI 🚀
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://www.docker.com/)
 
 基于 AI 的 GitLab Merge Request 代码审查工具。
@@ -18,6 +18,9 @@
 - **批量处理** - 分批处理大文件集，避免超出模型上下文限制
 - **Markdown 报告** - 生成结构化的审查总结报告
 - **Webhook 集成** - 通过 GitLab Webhook 自动触发审查
+- **Web 管理界面** - Vue 3 前端，查看和管理 AI 生成的评论与报告
+- **人工审核** - 支持手动审核后提交 AI 生成的评论，也支持自动提交模式
+- **数据持久化** - SQLite 存储审查记录，支持历史查询
 
 ## 🏗️ 架构设计
 
@@ -27,6 +30,10 @@ flowchart LR
     B --> C[Reviewer Engine]
     C --> D[GitLab API]
     C --> E[OpenAI API<br/>MiMo/GPT]
+    C --> F[(SQLite)]
+    G[Web Frontend] --> H[REST API]
+    H --> F
+    H --> D
 ```
 
 ## 🚀 快速开始
@@ -34,12 +41,19 @@ flowchart LR
 ### 1. 环境要求
 
 - Go 1.21+
+- Node.js 18+（构建前端，仅开发/构建时需要）
 - GitLab 账号（需配置 API Token）
 - OpenAI 兼容的 API（支持自定义基础 URL）
 
 ### 2. 配置
 
-复制项目中的 `config.yaml` 文件并根据你的环境修改以下关键参数：
+复制示例配置文件并根据你的环境修改：
+
+```bash
+cp config.yaml.example config.yaml
+```
+
+关键参数：
 
 ```yaml
 # GitLab 配置
@@ -54,9 +68,13 @@ openai_base_url: "https://api.openai.com/v1"  # 兼容自定义网关
 # 服务配置
 port: 8080                                # 服务监听端口
 webhook_token: "your-webhook-secret"      # GitLab Webhook 验证密钥（可选）
+
+# Web 管理界面配置
+password: "your-login-password"           # 登录密码（必填）
+jwt_secret: "your-jwt-secret-at-least-32-chars"  # JWT 签名密钥（必填）
 ```
 
-其他选项（如忽略路径、日志级别等）可按需调整。完整配置请参考仓库中的 `config.yaml` 文件。
+其他选项（如忽略路径、日志级别、数据库路径等）可按需调整。完整配置请参考 `config.yaml.example` 文件。
 
 ### 3. 启动服务
 
@@ -65,14 +83,25 @@ webhook_token: "your-webhook-secret"      # GitLab Webhook 验证密钥（可选
 git clone https://github.com/yuhua2000/gitreviewai.git
 cd gitreviewai
 
-# 安装依赖
-go mod tidy
-
-# 修改配置文件（按上节说明填写）
+# 复制并修改配置文件
+cp config.yaml.example config.yaml
 vi config.yaml
 
+# 构建前端 + 后端
+make build
+
 # 运行服务
-go run cmd/server/main.go
+./gitreviewai
+```
+
+开发模式（前后端分离，支持热重载）：
+
+```bash
+# 终端 1：启动后端
+make dev-go
+
+# 终端 2：启动前端开发服务器
+make dev-frontend
 ```
 ---
 
@@ -91,6 +120,7 @@ docker run -d \
   --name gitreviewai \
   -p 8080:8080 \
   -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/data:/app/data \
   gitreviewai
 ```
 
@@ -107,6 +137,7 @@ services:
       - "8080:8080"
     volumes:
       - ./config.yaml:/app/config.yaml
+      - ./data:/app/data
 ```
 
 然后运行：
@@ -122,6 +153,8 @@ docker-compose up -d
 ```yaml
 gitlab_token: "your_gitlab_token"
 openai_api_key: "your_openai_api_key"
+password: "your_login_password"
+jwt_secret: "your_jwt_secret_at_least_32_chars"
 port: 8080
 # 其他配置项...
 ```
@@ -140,7 +173,7 @@ port: 8080
    ```
    http://your-domain.com/webhook
    ```
-4. 在 **Secret token** 字段中输入您在 `config.yaml` 中配置的密钥（如果已设置）
+4. 在 **Secret token** 字段中输入您在 `config.yaml` 中配置的 `webhook_token`（如果已设置）
 5. 选择触发事件：
    - [x] **Merge requests events**
 6. 取消勾选 **Enable SSL verification**（如果使用HTTPS且证书有效）
@@ -203,6 +236,10 @@ port: 8080
 - [x] GitLab Webhook 集成
 - [x] AI 行级评论功能
 - [x] Markdown 报告生成
+- [x] SQLite 数据持久化
+- [x] Web 管理界面（Vue 3）
+- [x] JWT 认证登录
+- [x] 人工审核与自动提交模式
 - [ ] 自定义审查规则
 - [ ] 审查历史统计
 - [ ] 多语言优化
