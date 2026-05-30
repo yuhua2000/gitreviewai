@@ -170,8 +170,12 @@ const reviewStatusLabel = computed(() => {
 
 async function handleSubmitComment(commentId) {
   try {
-    await mrsStore.submitComment(commentId)
-    message.success('评论已提交')
+    const result = await mrsStore.submitComment(commentId)
+    if (result.warning) {
+      message.warning(result.warning)
+    } else {
+      message.success('评论已提交')
+    }
   } catch (e) {
     message.error(e.error || '提交失败')
   }
@@ -179,8 +183,12 @@ async function handleSubmitComment(commentId) {
 
 async function handleSubmitReport(reportId) {
   try {
-    await mrsStore.submitReport(reportId)
-    message.success('报告已提交')
+    const result = await mrsStore.submitReport(reportId)
+    if (result.warning) {
+      message.warning(result.warning)
+    } else {
+      message.success('报告已提交')
+    }
   } catch (e) {
     message.error(e.error || '提交失败')
   }

@@ -1,0 +1,55 @@
+version: "2"
+
+output:
+  formats:
+    text:
+      path: stdout
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - gocheckcompilerdirectives
+    - gomoddirectives
+    - govet
+    - ineffassign
+    - staticcheck
+    - unconvert
+    - unused
+    - wastedassign
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      exclude-functions:
+        - (*database/sql.DB).Close
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.Stmt).Close
+        - (*database/sql.Rows).Close
+        - (*io.Closer).Close
+        - fmt.Fprintf
+        - fmt.Fprint
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - _test\.go$
+      - vendor
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/yuhua2000/gitreviewai
+  exclusions:
+    generated: lax
+    paths:
+      - _test\.go$
+      - vendor

@@ -138,7 +138,15 @@ func (h *Handler) submitComment(c *gin.Context) {
 		}
 
 		draftID64 := int64(draftID)
-		h.commentStore.UpdateStatus(c.Request.Context(), id, "submitted", nil, &draftID64)
+		if err := h.commentStore.UpdateStatus(c.Request.Context(), id, "submitted", nil, &draftID64); err != nil {
+			slog.Error("failed to update comment status", "id", id, "error", err)
+			c.JSON(http.StatusOK, gin.H{
+				"id":      id,
+				"status":  "submitted",
+				"warning": "评论已提交但状态更新失败，请刷新页面",
+			})
+			return
+		}
 	} else {
 		noteID, err := h.glClient.PostMRNote(ctx, mr.ProjectID, mr.MRIID, comment.Content)
 		if err != nil {
@@ -148,7 +156,15 @@ func (h *Handler) submitComment(c *gin.Context) {
 		}
 
 		noteID64 := int64(noteID)
-		h.commentStore.UpdateStatus(c.Request.Context(), id, "submitted", &noteID64, nil)
+		if err := h.commentStore.UpdateStatus(c.Request.Context(), id, "submitted", &noteID64, nil); err != nil {
+			slog.Error("failed to update comment status", "id", id, "error", err)
+			c.JSON(http.StatusOK, gin.H{
+				"id":      id,
+				"status":  "submitted",
+				"warning": "评论已提交但状态更新失败，请刷新页面",
+			})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -205,7 +221,15 @@ func (h *Handler) submitReport(c *gin.Context) {
 	}
 
 	noteID64 := int64(noteID)
-	h.reportStore.UpdateStatus(c.Request.Context(), id, "submitted", &noteID64)
+	if err := h.reportStore.UpdateStatus(c.Request.Context(), id, "submitted", &noteID64); err != nil {
+		slog.Error("failed to update report status", "id", id, "error", err)
+		c.JSON(http.StatusOK, gin.H{
+			"id":      id,
+			"status":  "submitted",
+			"warning": "报告已提交但状态更新失败，请刷新页面",
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":     id,
@@ -270,8 +294,11 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 					submitErr = err
 				} else {
 					draftID64 := int64(draftID)
-					h.commentStore.UpdateStatus(c.Request.Context(), comment.ID, "submitted", nil, &draftID64)
-					submittedComments++
+					if err := h.commentStore.UpdateStatus(c.Request.Context(), comment.ID, "submitted", nil, &draftID64); err != nil {
+						errors = append(errors, fmt.Sprintf("comment %d update status: %v", comment.ID, err))
+					} else {
+						submittedComments++
+					}
 				}
 			}
 		} else {
@@ -280,8 +307,11 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 				submitErr = err
 			} else {
 				noteID64 := int64(noteID)
-				h.commentStore.UpdateStatus(c.Request.Context(), comment.ID, "submitted", &noteID64, nil)
-				submittedComments++
+				if err := h.commentStore.UpdateStatus(c.Request.Context(), comment.ID, "submitted", &noteID64, nil); err != nil {
+					errors = append(errors, fmt.Sprintf("comment %d update status: %v", comment.ID, err))
+				} else {
+					submittedComments++
+				}
 			}
 		}
 
@@ -315,8 +345,11 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 			errors = append(errors, fmt.Sprintf("report %d: %v", report.ID, err))
 		} else {
 			noteID64 := int64(noteID)
-			h.reportStore.UpdateStatus(c.Request.Context(), report.ID, "submitted", &noteID64)
-			submittedReports++
+			if err := h.reportStore.UpdateStatus(c.Request.Context(), report.ID, "submitted", &noteID64); err != nil {
+				errors = append(errors, fmt.Sprintf("report %d update status: %v", report.ID, err))
+			} else {
+				submittedReports++
+			}
 		}
 	}
 

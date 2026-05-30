@@ -147,11 +147,11 @@ func FormatDiffContextForDisplay(contextJSON string) string {
 	for _, dl := range lines {
 		switch dl.Type {
 		case "add":
-			sb.WriteString(fmt.Sprintf("+%4d | %s\n", dl.Line, dl.Text))
+			fmt.Fprintf(&sb, "+%4d | %s\n", dl.Line, dl.Text)
 		case "del":
-			sb.WriteString(fmt.Sprintf("-     | %s\n", dl.Text))
+			fmt.Fprintf(&sb, "-     | %s\n", dl.Text)
 		default:
-			sb.WriteString(fmt.Sprintf(" %4d | %s\n", dl.Line, dl.Text))
+			fmt.Fprintf(&sb, " %4d | %s\n", dl.Line, dl.Text)
 		}
 	}
 	return sb.String()

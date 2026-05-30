@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -128,12 +127,4 @@ func parsePositiveInt(s string) (int, error) {
 		n = n*10 + int(c-'0')
 	}
 	return n, nil
-}
-
-func timePtr(t time.Time) *time.Time {
-	return &t
-}
-
-func int64Ptr(v int64) *int64 {
-	return &v
 }

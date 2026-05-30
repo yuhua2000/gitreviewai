@@ -81,7 +81,9 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	// 3. Get MR changes
 	changes, diffRefs, err := r.glClient.GetMRChanges(ctx, projectID, mrIID)
 	if err != nil {
-		r.mrStore.UpdateReviewStatus(ctx, mrID, "failed")
+		if updateErr := r.mrStore.UpdateReviewStatus(ctx, mrID, "failed"); updateErr != nil {
+			slog.Error("failed to update review status", "mr_id", mrID, "error", updateErr)
+		}
 		return fmt.Errorf("failed to get MR changes: %w", err)
 	}
 	slog.Info("found changed files", "count", len(changes))
@@ -122,7 +124,9 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	// 9. Execute AI review
 	response, err := r.aiClient.ChatWithLimit(ctx, ai.SystemPrompt(), initialMessage, toolHandler, 50)
 	if err != nil {
-		r.mrStore.UpdateReviewStatus(ctx, mrID, "failed")
+		if updateErr := r.mrStore.UpdateReviewStatus(ctx, mrID, "failed"); updateErr != nil {
+			slog.Error("failed to update review status", "mr_id", mrID, "error", updateErr)
+		}
 		return fmt.Errorf("AI review failed: %w", err)
 	}
 	slog.Info("AI review completed", "response_length", len(response))
@@ -204,7 +208,9 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	}
 
 	// 11. Update MR status
-	r.mrStore.UpdateReviewStatus(ctx, mrID, "completed")
+	if err := r.mrStore.UpdateReviewStatus(ctx, mrID, "completed"); err != nil {
+		slog.Error("failed to update review status", "mr_id", mrID, "error", err)
+	}
 
 	slog.Info("review completed",
 		"project", projectID,
@@ -244,7 +250,9 @@ func (r *Reviewer) submitSingleLineComment(ctx context.Context, projectID string
 	}
 
 	draftID64 := int64(draftID)
-	r.commentStore.UpdateStatus(ctx, commentID, "submitted", nil, &draftID64)
+	if err := r.commentStore.UpdateStatus(ctx, commentID, "submitted", nil, &draftID64); err != nil {
+		slog.Error("failed to update comment status", "comment_id", commentID, "error", err)
+	}
 	slog.Info("line comment submitted", "file", comment.File, "line", comment.Line, "draft_id", draftID)
 }
 
@@ -258,7 +266,9 @@ func (r *Reviewer) submitSingleReviewComment(ctx context.Context, projectID stri
 	}
 
 	noteID64 := int64(noteID)
-	r.commentStore.UpdateStatus(ctx, commentID, "submitted", &noteID64, nil)
+	if err := r.commentStore.UpdateStatus(ctx, commentID, "submitted", &noteID64, nil); err != nil {
+		slog.Error("failed to update comment status", "comment_id", commentID, "error", err)
+	}
 	slog.Info("review comment submitted", "note_id", noteID)
 }
 
@@ -285,7 +295,9 @@ func (r *Reviewer) submitSingleReport(ctx context.Context, projectID string, mrI
 	}
 
 	noteID64 := int64(noteID)
-	r.reportStore.UpdateStatus(ctx, reportID, "submitted", &noteID64)
+	if err := r.reportStore.UpdateStatus(ctx, reportID, "submitted", &noteID64); err != nil {
+		slog.Error("failed to update report status", "report_id", reportID, "error", err)
+	}
 	slog.Info("report submitted", "note_id", noteID)
 }
 
@@ -486,7 +498,7 @@ func (r *Reviewer) formatInitialChangesSummary(changes []gitlab.MRChange, maxFil
 		} else if change.RenamedFile {
 			status = "renamed"
 		}
-		sb.WriteString(fmt.Sprintf("### %s (%s)\n", change.NewPath, status))
+		fmt.Fprintf(&sb, "### %s (%s)\n", change.NewPath, status)
 
 		diff := change.Diff
 		if len(diff) > 3000 {
@@ -523,7 +535,7 @@ func (r *Reviewer) formatMoreChanges(state *reviewState, batchSize int) (string,
 		} else if change.RenamedFile {
 			status = "renamed"
 		}
-		sb.WriteString(fmt.Sprintf("### %s (%s)\n", change.NewPath, status))
+		fmt.Fprintf(&sb, "### %s (%s)\n", change.NewPath, status)
 
 		diff := change.Diff
 		if len(diff) > 3000 {
@@ -607,7 +619,7 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 			}
 
 			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("📄 文件: %s\n📍 行号: %d-%d (共 %d 行)\n---\n", params.Path, start+1, end, totalLines))
+			fmt.Fprintf(&sb, "📄 文件: %s\n📍 行号: %d-%d (共 %d 行)\n---\n", params.Path, start+1, end, totalLines)
 			for i := start; i < end && i < totalLines; i++ {
 				if i > start {
 					sb.WriteString("\n")

@@ -109,7 +109,7 @@ func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionM
 		}
 
 		resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Model:    openai.ChatModel(c.model),
+			Model:    c.model,
 			Messages: messages,
 			Tools:    c.tools,
 		})
@@ -207,7 +207,7 @@ func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCom
 	var historyText strings.Builder
 	historyText.WriteString("Conversation history:\n\n")
 	for _, msg := range messagesToCompress {
-		historyText.WriteString(fmt.Sprintf("- %v\n", msg))
+		fmt.Fprintf(&historyText, "- %v\n", msg)
 	}
 
 	// Call AI to generate compression summary
@@ -217,7 +217,7 @@ func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCom
 	}
 
 	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model:    openai.ChatModel(c.model),
+		Model:    c.model,
 		Messages: compressMessages,
 	})
 	if err != nil {
