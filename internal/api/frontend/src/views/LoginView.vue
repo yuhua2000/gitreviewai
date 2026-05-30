@@ -58,7 +58,7 @@ async function handleLogin() {
     message.success('登录成功')
     router.push('/mrs')
   } catch (e) {
-    error.value = e.error || '登录失败'
+    error.value = e.message || '登录失败'
   } finally {
     loading.value = false
   }

@@ -16,8 +16,17 @@ client.interceptors.request.use((config) => {
   return config
 })
 
+const SUCCESS_CODE = 1000
+
 client.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    const body = response.data
+    if (body.code === SUCCESS_CODE) {
+      return body.data
+    }
+    // 业务码非成功，当作错误处理
+    return Promise.reject(body)
+  },
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token')

@@ -9,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/yuhua2000/gitreviewai/internal/types"
 )
 
 type contextKey string
@@ -61,13 +63,13 @@ func GinMiddleware(secret string) gin.HandlerFunc {
 		}
 
 		if tokenString == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, types.Error(types.CodeUnauthorized, "unauthorized"))
 			return
 		}
 
 		claims, err := ValidateToken(secret, tokenString)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, types.Error(types.CodeUnauthorized, "unauthorized"))
 			return
 		}
 
@@ -82,22 +84,22 @@ func GinLoginHandler(password, secret string, expiry time.Duration) gin.HandlerF
 			Password string `json:"password"`
 		}
 		if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+			c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid request"))
 			return
 		}
 
 		if subtle.ConstantTimeCompare([]byte(req.Password), []byte(password)) != 1 {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid password"})
+			c.JSON(http.StatusUnauthorized, types.Error(types.CodeUnauthorized, "invalid password"))
 			return
 		}
 
 		token, err := GenerateToken(secret, expiry)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to generate token"))
 			return
 		}
 
 		c.SetCookie("token", token, int(expiry.Seconds()), "/", "", false, true)
-		c.JSON(http.StatusOK, gin.H{"token": token})
+		c.JSON(http.StatusOK, types.Success(types.LoginData{Token: token}))
 	}
 }

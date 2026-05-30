@@ -3,23 +3,9 @@ package database
 import (
 	"context"
 	"database/sql"
-	"time"
-)
 
-type Comment struct {
-	ID                int64      `json:"id"`
-	MRID              int64      `json:"mr_id"`
-	CommentType       string     `json:"comment_type"` // "line" or "review"
-	FilePath          string     `json:"file_path"`
-	LineNumber        int        `json:"line_number"`
-	Content           string     `json:"content"`
-	DiffContext       string     `json:"diff_context"`
-	Status            string     `json:"status"` // "pending" or "submitted"
-	GitlabNoteID      *int64     `json:"gitlab_note_id"`
-	GitlabDraftNoteID *int64     `json:"gitlab_draft_note_id"`
-	SubmittedAt       *time.Time `json:"submitted_at"`
-	CreatedAt         time.Time  `json:"created_at"`
-}
+	"github.com/yuhua2000/gitreviewai/internal/types"
+)
 
 type CommentStore struct {
 	db *sql.DB
@@ -29,7 +15,7 @@ func NewCommentStore(db *sql.DB) *CommentStore {
 	return &CommentStore{db: db}
 }
 
-func (s *CommentStore) Create(ctx context.Context, c *Comment) (int64, error) {
+func (s *CommentStore) Create(ctx context.Context, c *types.Comment) (int64, error) {
 	query := `INSERT INTO comments (mr_id, comment_type, file_path, line_number, content, diff_context, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`
 	result, err := s.db.ExecContext(ctx, query,
@@ -40,7 +26,7 @@ func (s *CommentStore) Create(ctx context.Context, c *Comment) (int64, error) {
 	return result.LastInsertId()
 }
 
-func (s *CommentStore) CreateBatch(ctx context.Context, comments []*Comment) error {
+func (s *CommentStore) CreateBatch(ctx context.Context, comments []*types.Comment) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -71,7 +57,7 @@ func (s *CommentStore) CreateBatch(ctx context.Context, comments []*Comment) err
 	return tx.Commit()
 }
 
-func (s *CommentStore) ListByMRID(ctx context.Context, mrID int64) ([]*Comment, error) {
+func (s *CommentStore) ListByMRID(ctx context.Context, mrID int64) ([]*types.Comment, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, mr_id, comment_type, file_path, line_number, content, diff_context, status, gitlab_note_id, gitlab_draft_note_id, submitted_at, created_at
 		FROM comments WHERE mr_id = ? ORDER BY id`, mrID)
@@ -80,9 +66,9 @@ func (s *CommentStore) ListByMRID(ctx context.Context, mrID int64) ([]*Comment, 
 	}
 	defer rows.Close()
 
-	var comments []*Comment
+	var comments []*types.Comment
 	for rows.Next() {
-		c := &Comment{}
+		c := &types.Comment{}
 		err := rows.Scan(&c.ID, &c.MRID, &c.CommentType, &c.FilePath, &c.LineNumber,
 			&c.Content, &c.DiffContext, &c.Status, &c.GitlabNoteID, &c.GitlabDraftNoteID, &c.SubmittedAt, &c.CreatedAt)
 		if err != nil {
@@ -93,8 +79,8 @@ func (s *CommentStore) ListByMRID(ctx context.Context, mrID int64) ([]*Comment, 
 	return comments, rows.Err()
 }
 
-func (s *CommentStore) GetByID(ctx context.Context, id int64) (*Comment, error) {
-	c := &Comment{}
+func (s *CommentStore) GetByID(ctx context.Context, id int64) (*types.Comment, error) {
+	c := &types.Comment{}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, mr_id, comment_type, file_path, line_number, content, diff_context, status, gitlab_note_id, gitlab_draft_note_id, submitted_at, created_at
 		FROM comments WHERE id = ?`, id,

@@ -177,7 +177,7 @@ async function handleSubmitComment(commentId) {
       message.success('评论已提交')
     }
   } catch (e) {
-    message.error(e.error || '提交失败')
+    message.error(e.message || '提交失败')
   }
 }
 
@@ -190,7 +190,7 @@ async function handleSubmitReport(reportId) {
       message.success('报告已提交')
     }
   } catch (e) {
-    message.error(e.error || '提交失败')
+    message.error(e.message || '提交失败')
   }
 }
 
@@ -203,7 +203,7 @@ async function handleSubmitAll() {
       result.errors.forEach(err => message.warning(err))
     }
   } catch (e) {
-    message.error(e.error || '提交失败')
+    message.error(e.message || '提交失败')
   } finally {
     submitting.value = false
   }

@@ -10,8 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/yuhua2000/gitreviewai/internal/database"
 	"github.com/yuhua2000/gitreviewai/internal/gitlab"
+	"github.com/yuhua2000/gitreviewai/internal/types"
 )
 
 func (h *Handler) listMergeRequests(c *gin.Context) {
@@ -20,83 +20,83 @@ func (h *Handler) listMergeRequests(c *gin.Context) {
 	mrs, total, err := h.mrStore.List(c.Request.Context(), offset, limit)
 	if err != nil {
 		slog.Error("failed to list MRs", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list merge requests"})
+		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to list merge requests"))
 		return
 	}
 
 	page := offset/limit + 1
-	c.JSON(http.StatusOK, gin.H{
-		"data":      mrs,
-		"total":     total,
-		"page":      page,
-		"page_size": limit,
-	})
+	c.JSON(http.StatusOK, types.Success(types.PaginatedData{
+		Data:     mrs,
+		Total:    total,
+		Page:     page,
+		PageSize: limit,
+	}))
 }
 
 func (h *Handler) getMergeRequest(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid id"))
 		return
 	}
 
 	mr, err := h.mrStore.GetByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "merge request not found"})
+		c.JSON(http.StatusNotFound, types.Error(types.CodeNotFound, "merge request not found"))
 		return
 	}
 
 	comments, err := h.commentStore.ListByMRID(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("failed to list comments", "error", err)
-		comments = []*database.Comment{}
+		comments = []*types.Comment{}
 	}
 
 	reports, err := h.reportStore.ListByMRID(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("failed to list reports", "error", err)
-		reports = []*database.Report{}
+		reports = []*types.Report{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"id":            mr.ID,
-		"project_id":    mr.ProjectID,
-		"mr_iid":        mr.MRIID,
-		"title":         mr.Title,
-		"description":   mr.Description,
-		"source_branch": mr.SourceBranch,
-		"target_branch": mr.TargetBranch,
-		"state":         mr.State,
-		"web_url":       mr.WebURL,
-		"review_status": mr.ReviewStatus,
-		"created_at":    mr.CreatedAt,
-		"updated_at":    mr.UpdatedAt,
-		"comments":      comments,
-		"reports":       reports,
-	})
+	c.JSON(http.StatusOK, types.Success(types.MRDetailData{
+		ID:           mr.ID,
+		ProjectID:    mr.ProjectID,
+		MRIID:        mr.MRIID,
+		Title:        mr.Title,
+		Description:  mr.Description,
+		SourceBranch: mr.SourceBranch,
+		TargetBranch: mr.TargetBranch,
+		State:        mr.State,
+		WebURL:       mr.WebURL,
+		ReviewStatus: mr.ReviewStatus,
+		CreatedAt:    mr.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:    mr.UpdatedAt.Format(time.RFC3339),
+		Comments:     comments,
+		Reports:      reports,
+	}))
 }
 
 func (h *Handler) submitComment(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid id"))
 		return
 	}
 
 	comment, err := h.commentStore.GetByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "comment not found"})
+		c.JSON(http.StatusNotFound, types.Error(types.CodeNotFound, "comment not found"))
 		return
 	}
 
 	if comment.Status == "submitted" {
-		c.JSON(http.StatusConflict, gin.H{"error": "comment already submitted"})
+		c.JSON(http.StatusConflict, types.Error(types.CodeConflict, "comment already submitted"))
 		return
 	}
 
 	mr, err := h.mrStore.GetByID(c.Request.Context(), comment.MRID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get merge request"})
+		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to get merge request"))
 		return
 	}
 
@@ -108,7 +108,7 @@ func (h *Handler) submitComment(c *gin.Context) {
 		_, diffRefs, err := h.glClient.GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
 		if err != nil {
 			slog.Error("failed to get MR changes for diff refs", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get MR changes"})
+			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to get MR changes"))
 			return
 		}
 
@@ -127,73 +127,73 @@ func (h *Handler) submitComment(c *gin.Context) {
 		draftID, err := h.glClient.CreateDraftNote(ctx, mr.ProjectID, mr.MRIID, draft)
 		if err != nil {
 			slog.Error("failed to create draft note", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create draft note"})
+			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to create draft note"))
 			return
 		}
 
 		if err := h.glClient.PublishDraftNote(ctx, mr.ProjectID, mr.MRIID, draftID); err != nil {
 			slog.Error("failed to publish draft note", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish draft note"})
+			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to publish draft note"))
 			return
 		}
 
 		draftID64 := int64(draftID)
 		if err := h.commentStore.UpdateStatus(c.Request.Context(), id, "submitted", nil, &draftID64); err != nil {
 			slog.Error("failed to update comment status", "id", id, "error", err)
-			c.JSON(http.StatusOK, gin.H{
-				"id":      id,
-				"status":  "submitted",
-				"warning": "评论已提交但状态更新失败，请刷新页面",
-			})
+			c.JSON(http.StatusOK, types.Success(types.SubmitResult{
+				ID:      id,
+				Status:  "submitted",
+				Warning: "评论已提交但状态更新失败，请刷新页面",
+			}))
 			return
 		}
 	} else {
 		noteID, err := h.glClient.PostMRNote(ctx, mr.ProjectID, mr.MRIID, comment.Content)
 		if err != nil {
 			slog.Error("failed to post review comment", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to post comment"})
+			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to post comment"))
 			return
 		}
 
 		noteID64 := int64(noteID)
 		if err := h.commentStore.UpdateStatus(c.Request.Context(), id, "submitted", &noteID64, nil); err != nil {
 			slog.Error("failed to update comment status", "id", id, "error", err)
-			c.JSON(http.StatusOK, gin.H{
-				"id":      id,
-				"status":  "submitted",
-				"warning": "评论已提交但状态更新失败，请刷新页面",
-			})
+			c.JSON(http.StatusOK, types.Success(types.SubmitResult{
+				ID:      id,
+				Status:  "submitted",
+				Warning: "评论已提交但状态更新失败，请刷新页面",
+			}))
 			return
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"id":     id,
-		"status": "submitted",
-	})
+	c.JSON(http.StatusOK, types.Success(types.SubmitResult{
+		ID:     id,
+		Status: "submitted",
+	}))
 }
 
 func (h *Handler) submitReport(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid id"))
 		return
 	}
 
 	report, err := h.reportStore.GetByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "report not found"})
+		c.JSON(http.StatusNotFound, types.Error(types.CodeNotFound, "report not found"))
 		return
 	}
 
 	if report.Status == "submitted" {
-		c.JSON(http.StatusConflict, gin.H{"error": "report already submitted"})
+		c.JSON(http.StatusConflict, types.Error(types.CodeConflict, "report already submitted"))
 		return
 	}
 
 	mr, err := h.mrStore.GetByID(c.Request.Context(), report.MRID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get merge request"})
+		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to get merge request"))
 		return
 	}
 
@@ -216,37 +216,37 @@ func (h *Handler) submitReport(c *gin.Context) {
 	noteID, err := h.glClient.PostMRNote(ctx, mr.ProjectID, mr.MRIID, reportBody)
 	if err != nil {
 		slog.Error("failed to post report", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to post report"})
+		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to post report"))
 		return
 	}
 
 	noteID64 := int64(noteID)
 	if err := h.reportStore.UpdateStatus(c.Request.Context(), id, "submitted", &noteID64); err != nil {
 		slog.Error("failed to update report status", "id", id, "error", err)
-		c.JSON(http.StatusOK, gin.H{
-			"id":      id,
-			"status":  "submitted",
-			"warning": "报告已提交但状态更新失败，请刷新页面",
-		})
+		c.JSON(http.StatusOK, types.Success(types.SubmitResult{
+			ID:      id,
+			Status:  "submitted",
+			Warning: "报告已提交但状态更新失败，请刷新页面",
+		}))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"id":     id,
-		"status": "submitted",
-	})
+	c.JSON(http.StatusOK, types.Success(types.SubmitResult{
+		ID:     id,
+		Status: "submitted",
+	}))
 }
 
 func (h *Handler) submitAllPending(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid id"))
 		return
 	}
 
 	mr, err := h.mrStore.GetByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "merge request not found"})
+		c.JSON(http.StatusNotFound, types.Error(types.CodeNotFound, "merge request not found"))
 		return
 	}
 
@@ -257,7 +257,7 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 	_, diffRefs, err := h.glClient.GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
 	if err != nil {
 		slog.Error("failed to get MR changes", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get MR changes"})
+		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to get MR changes"))
 		return
 	}
 
@@ -353,23 +353,23 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"submitted_comments": submittedComments,
-		"submitted_reports":  submittedReports,
-		"errors":             errors,
-	})
+	c.JSON(http.StatusOK, types.Success(types.SubmitAllResult{
+		SubmittedComments: submittedComments,
+		SubmittedReports:  submittedReports,
+		Errors:            errors,
+	}))
 }
 
 func (h *Handler) getMRChanges(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid id"))
 		return
 	}
 
 	mr, err := h.mrStore.GetByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "merge request not found"})
+		c.JSON(http.StatusNotFound, types.Error(types.CodeNotFound, "merge request not found"))
 		return
 	}
 
@@ -379,7 +379,7 @@ func (h *Handler) getMRChanges(c *gin.Context) {
 	changes, _, err := h.glClient.GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
 	if err != nil {
 		slog.Error("failed to get MR changes", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get MR changes"})
+		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to get MR changes"))
 		return
 	}
 
@@ -396,40 +396,38 @@ func (h *Handler) getMRChanges(c *gin.Context) {
 	}
 
 	page := offset/limit + 1
-	c.JSON(http.StatusOK, gin.H{
-		"data":      changes[offset:end],
-		"total":     total,
-		"page":      page,
-		"page_size": limit,
-	})
+	c.JSON(http.StatusOK, types.Success(types.PaginatedData{
+		Data:     changes[offset:end],
+		Total:    total,
+		Page:     page,
+		PageSize: limit,
+	}))
 }
 
 func (h *Handler) getSettings(c *gin.Context) {
 	autoSubmit, _ := h.settingStore.GetAutoSubmit(c.Request.Context())
-	c.JSON(http.StatusOK, gin.H{
-		"auto_submit": autoSubmit,
-	})
+	c.JSON(http.StatusOK, types.Success(types.SettingsData{
+		AutoSubmit: autoSubmit,
+	}))
 }
 
 func (h *Handler) updateSettings(c *gin.Context) {
-	var req struct {
-		AutoSubmit *bool `json:"auto_submit"`
-	}
+	var req types.UpdateSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid request"))
 		return
 	}
 
 	if req.AutoSubmit != nil {
 		if err := h.settingStore.SetAutoSubmit(c.Request.Context(), *req.AutoSubmit); err != nil {
 			slog.Error("failed to set auto_submit", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update settings"})
+			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to update settings"))
 			return
 		}
 	}
 
 	autoSubmit, _ := h.settingStore.GetAutoSubmit(c.Request.Context())
-	c.JSON(http.StatusOK, gin.H{
-		"auto_submit": autoSubmit,
-	})
+	c.JSON(http.StatusOK, types.Success(types.SettingsData{
+		AutoSubmit: autoSubmit,
+	}))
 }

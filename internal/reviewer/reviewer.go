@@ -14,6 +14,7 @@ import (
 	"github.com/yuhua2000/gitreviewai/internal/config"
 	"github.com/yuhua2000/gitreviewai/internal/database"
 	"github.com/yuhua2000/gitreviewai/internal/gitlab"
+	"github.com/yuhua2000/gitreviewai/internal/types"
 )
 
 type Reviewer struct {
@@ -60,7 +61,7 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	slog.Info("MR info retrieved", "title", mrInfo.Title, "state", mrInfo.State)
 
 	// 2. Upsert MR into database
-	mrRecord := &database.MergeRequest{
+	mrRecord := &types.MergeRequest{
 		ProjectID:    projectID,
 		MRIID:        mrIID,
 		Title:        mrInfo.Title,
@@ -149,7 +150,7 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	// 10a. Persist line comments
 	for _, lc := range lineComments {
 		diffContext := ExtractDiffContext(diffMap[lc.File], lc.Line, 8)
-		comment := &database.Comment{
+		comment := &types.Comment{
 			MRID:        mrID,
 			CommentType: "line",
 			FilePath:    lc.File,
@@ -172,7 +173,7 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 
 	// 10b. Persist review comments
 	for _, rc := range state.reviewComments {
-		comment := &database.Comment{
+		comment := &types.Comment{
 			MRID:        mrID,
 			CommentType: "review",
 			Content:     rc,
@@ -192,7 +193,7 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 
 	// 10c. Persist report
 	if state.report != "" {
-		report := &database.Report{
+		report := &types.Report{
 			MRID:    mrID,
 			Content: state.report,
 			Status:  "pending",

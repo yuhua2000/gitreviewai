@@ -3,23 +3,9 @@ package database
 import (
 	"context"
 	"database/sql"
-	"time"
-)
 
-type MergeRequest struct {
-	ID           int64     `json:"id"`
-	ProjectID    string    `json:"project_id"`
-	MRIID        int       `json:"mr_iid"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	SourceBranch string    `json:"source_branch"`
-	TargetBranch string    `json:"target_branch"`
-	State        string    `json:"state"`
-	WebURL       string    `json:"web_url"`
-	ReviewStatus string    `json:"review_status"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
+	"github.com/yuhua2000/gitreviewai/internal/types"
+)
 
 type MRStore struct {
 	db *sql.DB
@@ -29,7 +15,7 @@ func NewMRStore(db *sql.DB) *MRStore {
 	return &MRStore{db: db}
 }
 
-func (s *MRStore) Upsert(ctx context.Context, mr *MergeRequest) (int64, error) {
+func (s *MRStore) Upsert(ctx context.Context, mr *types.MergeRequest) (int64, error) {
 	query := `INSERT INTO merge_requests (project_id, mr_iid, title, description, source_branch, target_branch, state, web_url, review_status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id, mr_iid) DO UPDATE SET
@@ -51,19 +37,19 @@ func (s *MRStore) Upsert(ctx context.Context, mr *MergeRequest) (int64, error) {
 	return id, err
 }
 
-func (s *MRStore) GetByID(ctx context.Context, id int64) (*MergeRequest, error) {
+func (s *MRStore) GetByID(ctx context.Context, id int64) (*types.MergeRequest, error) {
 	query := `SELECT id, project_id, mr_iid, title, description, source_branch, target_branch, state, web_url, review_status, created_at, updated_at
 		FROM merge_requests WHERE id = ?`
 	return s.scanMR(s.db.QueryRowContext(ctx, query, id))
 }
 
-func (s *MRStore) GetByProjectAndIID(ctx context.Context, projectID string, mrIID int) (*MergeRequest, error) {
+func (s *MRStore) GetByProjectAndIID(ctx context.Context, projectID string, mrIID int) (*types.MergeRequest, error) {
 	query := `SELECT id, project_id, mr_iid, title, description, source_branch, target_branch, state, web_url, review_status, created_at, updated_at
 		FROM merge_requests WHERE project_id = ? AND mr_iid = ?`
 	return s.scanMR(s.db.QueryRowContext(ctx, query, projectID, mrIID))
 }
 
-func (s *MRStore) List(ctx context.Context, offset, limit int) ([]*MergeRequest, int, error) {
+func (s *MRStore) List(ctx context.Context, offset, limit int) ([]*types.MergeRequest, int, error) {
 	var total int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM merge_requests`).Scan(&total)
 	if err != nil {
@@ -78,7 +64,7 @@ func (s *MRStore) List(ctx context.Context, offset, limit int) ([]*MergeRequest,
 	}
 	defer rows.Close()
 
-	var mrs []*MergeRequest
+	var mrs []*types.MergeRequest
 	for rows.Next() {
 		mr, err := s.scanMRRow(rows)
 		if err != nil {
@@ -95,8 +81,8 @@ func (s *MRStore) UpdateReviewStatus(ctx context.Context, id int64, status strin
 	return err
 }
 
-func (s *MRStore) scanMR(row *sql.Row) (*MergeRequest, error) {
-	mr := &MergeRequest{}
+func (s *MRStore) scanMR(row *sql.Row) (*types.MergeRequest, error) {
+	mr := &types.MergeRequest{}
 	err := row.Scan(&mr.ID, &mr.ProjectID, &mr.MRIID, &mr.Title, &mr.Description,
 		&mr.SourceBranch, &mr.TargetBranch, &mr.State, &mr.WebURL, &mr.ReviewStatus,
 		&mr.CreatedAt, &mr.UpdatedAt)
@@ -106,8 +92,8 @@ func (s *MRStore) scanMR(row *sql.Row) (*MergeRequest, error) {
 	return mr, nil
 }
 
-func (s *MRStore) scanMRRow(rows *sql.Rows) (*MergeRequest, error) {
-	mr := &MergeRequest{}
+func (s *MRStore) scanMRRow(rows *sql.Rows) (*types.MergeRequest, error) {
+	mr := &types.MergeRequest{}
 	err := rows.Scan(&mr.ID, &mr.ProjectID, &mr.MRIID, &mr.Title, &mr.Description,
 		&mr.SourceBranch, &mr.TargetBranch, &mr.State, &mr.WebURL, &mr.ReviewStatus,
 		&mr.CreatedAt, &mr.UpdatedAt)
