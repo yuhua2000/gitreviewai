@@ -40,10 +40,9 @@ flowchart LR
 
 ### 1. 环境要求
 
-- Go 1.25+
-- Node.js 18+（构建前端，仅开发/构建时需要）
 - GitLab 账号（需配置 API Token）
 - OpenAI 兼容的 API（支持自定义基础 URL）
+- 从源码构建需要：Go 1.25+、Node.js 18+
 
 ### 2. 配置
 
@@ -76,7 +75,37 @@ jwt_secret: "your-jwt-secret-at-least-32-chars"  # JWT 签名密钥（必填）
 
 其他选项（如忽略路径、日志级别、数据库路径等）可按需调整。完整配置请参考 `config.yaml.example` 文件。
 
-### 3. 启动服务
+### 3. 安装与启动
+
+#### 方式一：下载预编译二进制（推荐）
+
+从 [GitHub Releases](https://github.com/yuhua2000/GitReviewAI/releases) 下载对应平台的二进制文件：
+
+| 平台 | 文件名 |
+|------|--------|
+| Linux x86_64 | `gitreviewai-linux-amd64` |
+| Linux ARM64 | `gitreviewai-linux-arm64` |
+| macOS Intel | `gitreviewai-darwin-amd64` |
+| macOS Apple Silicon | `gitreviewai-darwin-arm64` |
+| Windows x86_64 | `gitreviewai-windows-amd64.exe` |
+| Windows ARM64 | `gitreviewai-windows-arm64.exe` |
+
+```bash
+# 下载（以 Linux amd64 为例，替换版本号）
+wget https://github.com/yuhua2000/GitReviewAI/releases/latest/download/gitreviewai-linux-amd64
+chmod +x gitreviewai-linux-amd64
+
+# 复制并修改配置文件
+cp config.yaml.example config.yaml
+vi config.yaml
+
+# 运行
+./gitreviewai-linux-amd64
+```
+
+> Release 中还提供了 `checksums.txt`，建议下载后校验 SHA256。
+
+#### 方式二：从源码构建
 
 ```bash
 # 克隆项目
