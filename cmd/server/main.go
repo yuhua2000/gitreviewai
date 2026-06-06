@@ -99,15 +99,15 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		// slog.Info("request",
-		// 	"status", param.StatusCode,
-		// 	"method", param.Method,
-		// 	"path", param.Path,
-		// 	"query", param.Request.URL.RawQuery,
-		// 	"ip", param.ClientIP,
-		// 	"latency", param.Latency.String(),
-		// 	"user_agent", param.Request.UserAgent(),
-		// )
+		slog.Info("request",
+			"status", param.StatusCode,
+			"method", param.Method,
+			"path", param.Path,
+			"query", param.Request.URL.RawQuery,
+			"ip", param.ClientIP,
+			"latency", param.Latency.String(),
+			"user_agent", param.Request.UserAgent(),
+		)
 		return ""
 	}))
 

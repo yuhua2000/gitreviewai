@@ -114,6 +114,26 @@
             </template>
           </n-spin>
         </n-tab-pane>
+
+        <n-tab-pane name="history" tab="审计历史">
+          <n-space vertical :size="12">
+            <n-button
+              type="primary"
+              size="small"
+              :loading="retrying"
+              @click="handleRetry"
+            >
+              重新审查
+            </n-button>
+            <n-data-table
+              :columns="reviewLogColumns"
+              :data="reviewLogs"
+              :bordered="false"
+              size="small"
+            />
+            <n-empty v-if="!reviewLogs.length" description="暂无审计记录" />
+          </n-space>
+        </n-tab-pane>
       </n-tabs>
     </n-card>
   </div>
@@ -121,10 +141,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, h } from 'vue'
 import { useRoute } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { useMessage, NTag } from 'naive-ui'
 import { useMrsStore } from '../stores/mrs'
+import { getReviewLogs, retryReview } from '../api/mrs'
 import CommentList from '../components/CommentList.vue'
 import ReportCard from '../components/ReportCard.vue'
 
@@ -132,8 +153,10 @@ const route = useRoute()
 const message = useMessage()
 const mrsStore = useMrsStore()
 const submitting = ref(false)
+const retrying = ref(false)
 const changesCurrentPage = ref(1)
 const changesLoaded = ref(false)
+const reviewLogs = ref([])
 
 const mr = computed(() => mrsStore.currentMR)
 
@@ -232,8 +255,94 @@ function handleChangesPageChange(page) {
   mrsStore.fetchMRChanges(mr.value.id, page, 20)
 }
 
+const reviewLogColumns = [
+  {
+    title: '时间',
+    key: 'created_at',
+    width: 150,
+    render(row) {
+      return formatTime(row.created_at)
+    },
+  },
+  {
+    title: '状态',
+    key: 'status',
+    width: 80,
+    render(row) {
+      const type = { running: 'warning', success: 'success', failed: 'error' }[row.status] || 'default'
+      const label = { running: '运行中', success: '成功', failed: '失败' }[row.status] || row.status
+      return h(NTag, { type, size: 'small' }, () => label)
+    },
+  },
+  {
+    title: '模型',
+    key: 'model_name',
+    width: 120,
+  },
+  {
+    title: '规则',
+    key: 'rules_count',
+    width: 60,
+  },
+  {
+    title: '评论',
+    key: 'comments_count',
+    width: 60,
+  },
+  {
+    title: 'Token',
+    key: 'total_tokens',
+    width: 90,
+    render(row) {
+      return row.total_tokens > 0 ? row.total_tokens.toLocaleString() : '-'
+    },
+  },
+  {
+    title: '耗时',
+    key: 'duration_ms',
+    width: 80,
+    render(row) {
+      return row.duration_ms > 0 ? `${(row.duration_ms / 1000).toFixed(1)}s` : '-'
+    },
+  },
+  {
+    title: '错误信息',
+    key: 'error_message',
+    ellipsis: { tooltip: true },
+  },
+]
+
+function formatTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const pad = n => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+async function loadReviewLogs() {
+  try {
+    reviewLogs.value = await getReviewLogs(route.params.id) || []
+  } catch {
+    reviewLogs.value = []
+  }
+}
+
+async function handleRetry() {
+  retrying.value = true
+  try {
+    await retryReview(route.params.id)
+    message.success('审查已重新启动，请稍后刷新查看结果')
+    setTimeout(() => loadReviewLogs(), 2000)
+  } catch (e) {
+    message.error(e.message || '重试失败')
+  } finally {
+    retrying.value = false
+  }
+}
+
 onMounted(() => {
   mrsStore.fetchMRDetail(route.params.id)
+  loadReviewLogs()
 })
 </script>
 

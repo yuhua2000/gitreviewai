@@ -12,6 +12,7 @@ import (
 
 	"github.com/yuhua2000/gitreviewai/internal/crypto"
 	"github.com/yuhua2000/gitreviewai/internal/gitlab"
+	"github.com/yuhua2000/gitreviewai/internal/reviewer"
 	"github.com/yuhua2000/gitreviewai/internal/types"
 )
 
@@ -481,4 +482,61 @@ func (h *Handler) updateSettings(c *gin.Context) {
 
 	// Return updated settings
 	h.getSettings(c)
+}
+
+func (h *Handler) listReviewLogs(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid id"))
+		return
+	}
+
+	logs, err := h.reviewLogStore.ListByMRID(c.Request.Context(), id)
+	if err != nil {
+		slog.Error("failed to list review logs", "error", err)
+		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to list review logs"))
+		return
+	}
+
+	c.JSON(http.StatusOK, types.Success(logs))
+}
+
+func (h *Handler) retryReview(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid id"))
+		return
+	}
+
+	mr, err := h.mrStore.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, types.Error(types.CodeNotFound, "merge request not found"))
+		return
+	}
+
+	projectID, _ := strconv.Atoi(mr.ProjectID)
+	req := reviewer.ReviewRequest{
+		ProjectID:    mr.ProjectID,
+		MRIID:        mr.MRIID,
+		ProjectName:  "",
+		Description:  "",
+		IsDraft:      false,
+		TargetBranch: mr.TargetBranch,
+		SourceBranch: mr.SourceBranch,
+	}
+
+	// Fetch project config to get name/description
+	if pc, _ := h.projectConfigStore.GetByProjectID(c.Request.Context(), projectID); pc != nil {
+		req.ProjectName = pc.ProjectName
+		req.Description = pc.Description
+	}
+
+	go func() {
+		slog.Info("retry review started", "project", req.ProjectID, "mr_iid", req.MRIID)
+		if err := h.reviewer.ReviewMR(context.Background(), req); err != nil {
+			slog.Error("retry review failed", "error", err)
+		}
+	}()
+
+	c.JSON(http.StatusOK, types.Success(gin.H{"message": "review started"}))
 }

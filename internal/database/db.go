@@ -48,6 +48,7 @@ func migrate(db *sql.DB) error {
 			state         TEXT    NOT NULL DEFAULT 'open',
 			web_url       TEXT    NOT NULL DEFAULT '',
 			review_status TEXT    NOT NULL DEFAULT 'pending',
+			error_message TEXT    NOT NULL DEFAULT '',
 			created_at    DATETIME NOT NULL DEFAULT (datetime('now')),
 			updated_at    DATETIME NOT NULL DEFAULT (datetime('now')),
 			UNIQUE(project_id, mr_iid)
@@ -84,6 +85,22 @@ func migrate(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_report_mr_id ON reports(mr_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_report_status ON reports(status)`,
+		`CREATE TABLE IF NOT EXISTS review_logs (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			mr_id             INTEGER NOT NULL,
+			status            TEXT    NOT NULL DEFAULT 'running',
+			error_message     TEXT    NOT NULL DEFAULT '',
+			model_name        TEXT    NOT NULL DEFAULT '',
+			rules_count       INTEGER NOT NULL DEFAULT 0,
+			comments_count    INTEGER NOT NULL DEFAULT 0,
+			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens      INTEGER NOT NULL DEFAULT 0,
+			duration_ms       INTEGER NOT NULL DEFAULT 0,
+			created_at        DATETIME NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (mr_id) REFERENCES merge_requests(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_review_logs_mr_id ON review_logs(mr_id)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key       TEXT PRIMARY KEY,
 			value     TEXT NOT NULL DEFAULT '',
@@ -143,6 +160,13 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(q); err != nil {
 			return fmt.Errorf("exec migration: %w\nQuery: %s", err, q)
 		}
+	}
+
+	// Idempotent ALTER TABLE for existing databases
+	for _, q := range []string{
+		`ALTER TABLE merge_requests ADD COLUMN error_message TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, _ = db.Exec(q) // ignore error (column already exists)
 	}
 
 	return nil

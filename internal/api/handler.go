@@ -28,6 +28,8 @@ type Handler struct {
 	aiModelStore       *database.AIModelStore
 	ruleStore          *database.ReviewRuleStore
 	projectConfigStore *database.ProjectConfigStore
+	reviewLogStore     *database.ReviewLogStore
+	reviewer           *reviewer.Reviewer
 	frontendFS         embed.FS
 }
 
@@ -42,6 +44,8 @@ func NewHandler(cfg *config.Config, db *sql.DB, rev *reviewer.Reviewer, frontend
 		aiModelStore:       database.NewAIModelStore(db),
 		ruleStore:          database.NewReviewRuleStore(db),
 		projectConfigStore: database.NewProjectConfigStore(db),
+		reviewLogStore:     database.NewReviewLogStore(db),
+		reviewer:           rev,
 		frontendFS:         frontendFS,
 	}
 }
@@ -76,6 +80,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 			authorized.POST("/comments/:id/submit", h.submitComment)
 			authorized.POST("/reports/:id/submit", h.submitReport)
 			authorized.POST("/mrs/:id/submit-all", h.submitAllPending)
+			authorized.GET("/mrs/:id/review-logs", h.listReviewLogs)
+			authorized.POST("/mrs/:id/retry", h.retryReview)
 			authorized.GET("/settings", h.getSettings)
 			authorized.PUT("/settings", h.updateSettings)
 
