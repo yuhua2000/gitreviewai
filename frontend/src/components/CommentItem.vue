@@ -9,6 +9,9 @@
           {{ comment.file_path }}:{{ comment.line_number }}
         </n-text>
         <StatusBadge :status="comment.status" />
+        <n-text v-if="comment.created_at" depth="3" style="font-size: 12px;">
+          {{ formatTime(comment.created_at) }}
+        </n-text>
       </n-space>
     </template>
     <template #header-extra>
@@ -58,6 +61,13 @@ const props = defineProps({
 })
 
 defineEmits(['submit'])
+
+function formatTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const pad = n => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 const md = new MarkdownIt({
   html: false,
