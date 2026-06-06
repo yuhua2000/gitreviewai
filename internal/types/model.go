@@ -14,6 +14,7 @@ type MergeRequest struct {
 	State        string    `json:"state"`
 	WebURL       string    `json:"web_url"`
 	ReviewStatus string    `json:"review_status"`
+	ErrorMessage string    `json:"error_message"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -95,4 +96,20 @@ type ProjectRuleOverride struct {
 	ProjectConfigID int64  `json:"project_config_id"`
 	RuleID          string `json:"rule_id"`
 	Enabled         bool   `json:"enabled"`
+}
+
+// ReviewLog 审计历史记录
+type ReviewLog struct {
+	ID               int64     `json:"id"`
+	MRID             int64     `json:"mr_id"`
+	Status           string    `json:"status"` // running, success, failed
+	ErrorMessage     string    `json:"error_message"`
+	ModelName        string    `json:"model_name"`
+	RulesCount       int       `json:"rules_count"`
+	CommentsCount    int       `json:"comments_count"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
+	DurationMs       int64     `json:"duration_ms"`
+	CreatedAt        time.Time `json:"created_at"`
 }

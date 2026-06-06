@@ -40,6 +40,7 @@ type Reviewer struct {
 	aiModelStore       *database.AIModelStore
 	ruleStore          *database.ReviewRuleStore
 	projectConfigStore *database.ProjectConfigStore
+	reviewLogStore     *database.ReviewLogStore
 }
 
 type reviewState struct {
@@ -65,11 +66,13 @@ func New(cfg *config.Config, db *sql.DB) *Reviewer {
 		aiModelStore:       database.NewAIModelStore(db),
 		ruleStore:          database.NewReviewRuleStore(db),
 		projectConfigStore: database.NewProjectConfigStore(db),
+		reviewLogStore:     database.NewReviewLogStore(db),
 	}
 }
 
 // ReviewMR executes a code review for the given MR.
 func (r *Reviewer) ReviewMR(ctx context.Context, req ReviewRequest) error {
+	startTime := time.Now()
 	slog.Info("review started", "project", req.ProjectID, "mr_iid", req.MRIID)
 
 	// 1. Get global settings from DB (with config.yaml as fallback)
@@ -132,110 +135,113 @@ func (r *Reviewer) ReviewMR(ctx context.Context, req ReviewRequest) error {
 	}
 	slog.Info("MR persisted to database", "mr_id", mrID)
 
-	// 7. Get MR changes
+	// 7. Resolve AI model config
+	modelName := r.resolveModelName(ctx, projectCfg)
+	rules := r.resolveRules(ctx, projectCfg)
+
+	// 8. Create review log (audit trail)
+	reviewLog := &types.ReviewLog{
+		MRID:       mrID,
+		Status:     "running",
+		ModelName:  modelName,
+		RulesCount: len(rules),
+	}
+	logID, err := r.reviewLogStore.Create(ctx, reviewLog)
+	if err != nil {
+		slog.Error("failed to create review log", "error", err)
+	}
+
+	// Deferred: update review log and MR status on exit
+	var reviewErr error
+	var totalComments int
+	var tokenUsage *ai.TokenUsage
+	defer func() {
+		duration := time.Since(startTime).Milliseconds()
+		logResult := &types.ReviewLog{
+			DurationMs: duration,
+		}
+
+		if reviewErr != nil {
+			logResult.Status = "failed"
+			logResult.ErrorMessage = reviewErr.Error()
+			_ = r.mrStore.UpdateReviewStatus(ctx, mrID, "failed", reviewErr.Error())
+		} else {
+			logResult.Status = "success"
+			logResult.CommentsCount = totalComments
+			if tokenUsage != nil {
+				logResult.PromptTokens = tokenUsage.PromptTokens
+				logResult.CompletionTokens = tokenUsage.CompletionTokens
+				logResult.TotalTokens = tokenUsage.TotalTokens
+			}
+			_ = r.mrStore.UpdateReviewStatus(ctx, mrID, "completed", "")
+		}
+
+		if logID > 0 {
+			if err := r.reviewLogStore.UpdateResult(ctx, logID, logResult); err != nil {
+				slog.Error("failed to update review log", "error", err)
+			}
+		}
+	}()
+
+	// 9. Get MR changes
 	changes, diffRefs, err := glClient.GetMRChanges(ctx, req.ProjectID, req.MRIID)
 	if err != nil {
-		if updateErr := r.mrStore.UpdateReviewStatus(ctx, mrID, "failed"); updateErr != nil {
-			slog.Error("failed to update review status", "mr_id", mrID, "error", updateErr)
-		}
-		return fmt.Errorf("failed to get MR changes: %w", err)
+		reviewErr = fmt.Errorf("failed to get MR changes: %w", err)
+		return reviewErr
 	}
 	slog.Info("found changed files", "count", len(changes))
 
-	// 8. Merge ignore paths (global + project-level)
-	ignorePaths := globalIgnorePaths
-	projectIgnorePaths := r.projectConfigStore.GetIgnorePaths(projectCfg)
-	if len(projectIgnorePaths) > 0 {
-		ignorePaths = append(ignorePaths, projectIgnorePaths...)
-	}
-
-	// 9. Filter changes
+	// 10. Filter changes
+	ignorePaths := r.mergeIgnorePaths(globalIgnorePaths, projectCfg)
 	filteredChanges := r.filterChanges(changes, ignorePaths)
 	slog.Info("files to review after filtering", "count", len(filteredChanges))
 
-	// 10. Get AI model config
-	apiKey := r.cfg.OpenAIAPIKey
-	modelName := r.cfg.OpenAIModel
-	baseURL := r.cfg.OpenAIBaseURL
-	if projectCfg.AIModelID != nil {
-		aiModel, err := r.aiModelStore.GetByID(ctx, *projectCfg.AIModelID)
-		if err == nil && aiModel.Enabled {
-			apiKey = aiModel.APIKey
-			modelName = aiModel.ModelName
-			baseURL = aiModel.BaseURL
-		}
-	} else {
-		// Try default model
-		defaultModel, _ := r.aiModelStore.GetDefault(ctx)
-		if defaultModel != nil {
-			apiKey = defaultModel.APIKey
-			modelName = defaultModel.ModelName
-			baseURL = defaultModel.BaseURL
-		}
-	}
+	// 11. Get AI model config and create client
+	apiKey, modelName, baseURL := r.resolveModelConfig(ctx, projectCfg)
 	if apiKey == "" {
-		return fmt.Errorf("AI API key not configured, please set it in web UI (AI Models) or config.yaml")
+		reviewErr = fmt.Errorf("AI API key not configured, please set it in web UI (AI Models) or config.yaml")
+		return reviewErr
 	}
 	aiClient := ai.NewClient(apiKey, modelName, baseURL)
-
-	// 11. Get enabled rules for this project
-	var rules []*types.ReviewRule
-	if projectCfg.ID > 0 {
-		rules, _ = r.ruleStore.GetEnabledRulesForProject(ctx, projectCfg.ID)
-	}
-	if len(rules) == 0 {
-		rules, _ = r.ruleStore.GetEnabledRules(ctx)
-	}
 
 	// 12. Build dynamic system prompt
 	systemPrompt := ai.BuildSystemPrompt(rules, projectCfg.CustomPrompt)
 
-	// 13. Initialize review state
+	// 13. Execute AI review
 	state := &reviewState{
 		projectID:    req.ProjectID,
 		sourceBranch: mrInfo.SourceBranch,
 		changes:      filteredChanges,
 	}
 
-	// 14. Prepare initial changes summary
 	initialSummary, remaining := r.formatInitialChangesSummary(filteredChanges, 10)
-
-	// 15. Prepare tool handler (with glClient closure)
 	toolHandler := func(name string, args json.RawMessage) (string, error) {
 		return r.handleToolCall(ctx, glClient, state, name, args)
 	}
 
-	// 16. Build initial message
 	initialMessage := ai.FormatInitialMessage(
-		mrInfo.Title,
-		mrInfo.Description,
-		mrInfo.SourceBranch,
-		mrInfo.TargetBranch,
+		mrInfo.Title, mrInfo.Description,
+		mrInfo.SourceBranch, mrInfo.TargetBranch,
 		initialSummary,
 	)
-
 	if remaining > 0 {
 		initialMessage += fmt.Sprintf("\n\n> 注意：当前展示前 %d 个文件，还有 %d 个文件未展示。使用 GetMoreChanges 工具查看更多变更。",
 			state.changesSent, remaining)
 	}
 
-	// 17. Execute AI review
-	response, err := aiClient.ChatWithLimit(ctx, systemPrompt, initialMessage, toolHandler, 50)
+	response, usage, err := aiClient.ChatWithLimit(ctx, systemPrompt, initialMessage, toolHandler, 50)
+	tokenUsage = usage
 	if err != nil {
-		if updateErr := r.mrStore.UpdateReviewStatus(ctx, mrID, "failed"); updateErr != nil {
-			slog.Error("failed to update review status", "mr_id", mrID, "error", updateErr)
-		}
-		return fmt.Errorf("AI review failed: %w", err)
+		reviewErr = fmt.Errorf("AI review failed: %w", err)
+		return reviewErr
 	}
-	slog.Info("AI review completed", "response_length", len(response))
+	slog.Info("AI review completed", "response_length", len(response), "total_tokens", usage.TotalTokens)
 
-	// 18. Determine max line comments (project override or global)
+	// 14. Persist results
 	maxComments := globalMaxComments
 	if projectCfg.MaxLineComments != nil {
 		maxComments = *projectCfg.MaxLineComments
 	}
-
-	// 19. Persist results to database
 	autoSubmit := projectCfg.AutoSubmit
 
 	lineComments := state.lineComments
@@ -244,85 +250,17 @@ func (r *Reviewer) ReviewMR(ctx context.Context, req ReviewRequest) error {
 		lineComments = lineComments[:maxComments]
 	}
 
-	// Build diff map for context extraction
 	diffMap := make(map[string]string)
 	for _, change := range filteredChanges {
 		diffMap[change.NewPath] = change.Diff
 	}
 
-	// 19a. Persist line comments
-	for _, lc := range lineComments {
-		diffContext := ExtractDiffContext(diffMap[lc.File], lc.Line, 8)
-		comment := &types.Comment{
-			MRID:        mrID,
-			CommentType: "line",
-			FilePath:    lc.File,
-			LineNumber:  lc.Line,
-			Content:     lc.Message,
-			DiffContext: diffContext,
-			Status:      "pending",
-		}
-		commentID, err := r.commentStore.Create(ctx, comment)
-		if err != nil {
-			slog.Error("failed to create line comment", "error", err)
-			continue
-		}
-		comment.ID = commentID
-
-		if autoSubmit {
-			r.submitSingleLineComment(ctx, glClient, req.ProjectID, req.MRIID, diffRefs, lc, commentID)
-		}
-	}
-
-	// 19b. Persist review comments
-	for _, rc := range state.reviewComments {
-		comment := &types.Comment{
-			MRID:        mrID,
-			CommentType: "review",
-			Content:     rc,
-			Status:      "pending",
-		}
-		commentID, err := r.commentStore.Create(ctx, comment)
-		if err != nil {
-			slog.Error("failed to create review comment", "error", err)
-			continue
-		}
-		comment.ID = commentID
-
-		if autoSubmit {
-			r.submitSingleReviewComment(ctx, glClient, req.ProjectID, req.MRIID, rc, commentID)
-		}
-	}
-
-	// 19c. Persist report
-	if state.report != "" {
-		report := &types.Report{
-			MRID:    mrID,
-			Content: state.report,
-			Status:  "pending",
-		}
-		reportID, err := r.reportStore.Create(ctx, report)
-		if err != nil {
-			slog.Error("failed to create report", "error", err)
-		} else {
-			if autoSubmit {
-				r.submitSingleReport(ctx, glClient, req.ProjectID, req.MRIID, state.report, reportID)
-			}
-		}
-	}
-
-	// 20. Update MR status
-	if err := r.mrStore.UpdateReviewStatus(ctx, mrID, "completed"); err != nil {
-		slog.Error("failed to update review status", "mr_id", mrID, "error", err)
-	}
+	totalComments = r.persistResults(ctx, req.ProjectID, req.MRIID, mrID, diffRefs, diffMap, lineComments, state.reviewComments, state.report, autoSubmit, glClient)
 
 	slog.Info("review completed",
-		"project", req.ProjectID,
-		"mr_iid", req.MRIID,
-		"mr_id", mrID,
-		"line_comments", len(lineComments),
-		"review_comments", len(state.reviewComments),
-		"auto_submit", autoSubmit)
+		"project", req.ProjectID, "mr_iid", req.MRIID, "mr_id", mrID,
+		"total_comments", totalComments, "total_tokens", usage.TotalTokens,
+		"duration_ms", time.Since(startTime).Milliseconds())
 
 	return nil
 }
@@ -408,6 +346,120 @@ func (r *Reviewer) submitSingleReport(ctx context.Context, glClient *gitlab.Clie
 // GetStores returns the database stores for use by API handlers.
 func (r *Reviewer) GetStores() (*database.MRStore, *database.CommentStore, *database.ReportStore, *database.SettingStore) {
 	return r.mrStore, r.commentStore, r.reportStore, r.settingStore
+}
+
+// resolveModelName returns the model name for the given project config.
+func (r *Reviewer) resolveModelName(ctx context.Context, projectCfg *types.ProjectConfig) string {
+	if projectCfg.AIModelID != nil {
+		aiModel, err := r.aiModelStore.GetByID(ctx, *projectCfg.AIModelID)
+		if err == nil && aiModel.Enabled {
+			return aiModel.ModelName
+		}
+	}
+	defaultModel, _ := r.aiModelStore.GetDefault(ctx)
+	if defaultModel != nil {
+		return defaultModel.ModelName
+	}
+	return r.cfg.OpenAIModel
+}
+
+// resolveRules returns the enabled rules for the given project config.
+func (r *Reviewer) resolveRules(ctx context.Context, projectCfg *types.ProjectConfig) []*types.ReviewRule {
+	var rules []*types.ReviewRule
+	if projectCfg.ID > 0 {
+		rules, _ = r.ruleStore.GetEnabledRulesForProject(ctx, projectCfg.ID)
+	}
+	if len(rules) == 0 {
+		rules, _ = r.ruleStore.GetEnabledRules(ctx)
+	}
+	return rules
+}
+
+// mergeIgnorePaths merges global and project-level ignore paths.
+func (r *Reviewer) mergeIgnorePaths(globalPaths []string, projectCfg *types.ProjectConfig) []string {
+	paths := globalPaths
+	projectPaths := r.projectConfigStore.GetIgnorePaths(projectCfg)
+	if len(projectPaths) > 0 {
+		paths = append(paths, projectPaths...)
+	}
+	return paths
+}
+
+// resolveModelConfig returns apiKey, modelName, baseURL for the given project config.
+func (r *Reviewer) resolveModelConfig(ctx context.Context, projectCfg *types.ProjectConfig) (string, string, string) {
+	apiKey := r.cfg.OpenAIAPIKey
+	modelName := r.cfg.OpenAIModel
+	baseURL := r.cfg.OpenAIBaseURL
+
+	if projectCfg.AIModelID != nil {
+		aiModel, err := r.aiModelStore.GetByID(ctx, *projectCfg.AIModelID)
+		if err == nil && aiModel.Enabled {
+			return aiModel.APIKey, aiModel.ModelName, aiModel.BaseURL
+		}
+	}
+	defaultModel, _ := r.aiModelStore.GetDefault(ctx)
+	if defaultModel != nil {
+		return defaultModel.APIKey, defaultModel.ModelName, defaultModel.BaseURL
+	}
+	return apiKey, modelName, baseURL
+}
+
+// persistResults saves all review results to the database. Returns total comment count.
+func (r *Reviewer) persistResults(ctx context.Context, projectID string, mrIID int, mrID int64,
+	diffRefs *gitlab.DiffRefs, diffMap map[string]string,
+	lineComments []ai.LineCommentResult, reviewComments []string, report string,
+	autoSubmit bool, glClient *gitlab.Client) int {
+
+	total := 0
+
+	// Line comments
+	for _, lc := range lineComments {
+		diffContext := ExtractDiffContext(diffMap[lc.File], lc.Line, 8)
+		comment := &types.Comment{
+			MRID: mrID, CommentType: "line",
+			FilePath: lc.File, LineNumber: lc.Line,
+			Content: lc.Message, DiffContext: diffContext, Status: "pending",
+		}
+		commentID, err := r.commentStore.Create(ctx, comment)
+		if err != nil {
+			slog.Error("failed to create line comment", "error", err)
+			continue
+		}
+		total++
+		if autoSubmit {
+			r.submitSingleLineComment(ctx, glClient, projectID, mrIID, diffRefs, lc, commentID)
+		}
+	}
+
+	// Review comments
+	for _, rc := range reviewComments {
+		comment := &types.Comment{
+			MRID: mrID, CommentType: "review",
+			Content: rc, Status: "pending",
+		}
+		commentID, err := r.commentStore.Create(ctx, comment)
+		if err != nil {
+			slog.Error("failed to create review comment", "error", err)
+			continue
+		}
+		total++
+		if autoSubmit {
+			r.submitSingleReviewComment(ctx, glClient, projectID, mrIID, rc, commentID)
+		}
+	}
+
+	// Report
+	if report != "" {
+		rp := &types.Report{MRID: mrID, Content: report, Status: "pending"}
+		reportID, err := r.reportStore.Create(ctx, rp)
+		if err != nil {
+			slog.Error("failed to create report", "error", err)
+		} else if autoSubmit {
+			r.submitSingleReport(ctx, glClient, projectID, mrIID, report, reportID)
+		}
+	}
+
+	return total
 }
 
 // filterChanges intelligently filters changed files.

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -18,6 +17,13 @@ type Client struct {
 	client openai.Client
 	model  string
 	tools  []openai.ChatCompletionToolParam
+}
+
+// TokenUsage tracks token consumption across API calls.
+type TokenUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
 }
 
 type ToolCallHandler func(name string, args json.RawMessage) (string, error)
@@ -74,12 +80,13 @@ func NewClient(apiKey, model, baseURL string) *Client {
 }
 
 // Chat executes a multi-turn conversation with tool calls
-func (c *Client) Chat(ctx context.Context, systemPrompt string, userMessage string, handler ToolCallHandler) (string, error) {
+func (c *Client) Chat(ctx context.Context, systemPrompt string, userMessage string, handler ToolCallHandler) (string, *TokenUsage, error) {
 	return c.ChatWithLimit(ctx, systemPrompt, userMessage, handler, 20)
 }
 
-// ChatWithLimit executes a multi-turn conversation with a custom max iteration limit
-func (c *Client) ChatWithLimit(ctx context.Context, systemPrompt string, userMessage string, handler ToolCallHandler, maxIterations int) (string, error) {
+// ChatWithLimit executes a multi-turn conversation with a custom max iteration limit.
+// Returns the last response text and cumulative token usage.
+func (c *Client) ChatWithLimit(ctx context.Context, systemPrompt string, userMessage string, handler ToolCallHandler, maxIterations int) (string, *TokenUsage, error) {
 	messages := []openai.ChatCompletionMessageParamUnion{
 		openai.SystemMessage(systemPrompt),
 		openai.UserMessage(userMessage),
@@ -93,8 +100,9 @@ const (
 	compressThreshold = 25
 )
 
-func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionMessageParamUnion, handler ToolCallHandler, maxIterations int) (string, error) {
+func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionMessageParamUnion, handler ToolCallHandler, maxIterations int) (string, *TokenUsage, error) {
 	var lastResponse string
+	usage := &TokenUsage{}
 
 	for i := 0; i < maxIterations; i++ {
 		// 检查是否需要压缩对话历史
@@ -102,7 +110,7 @@ func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionM
 			slog.Info("conversation history too long, compressing", "count", len(messages))
 			compressed, err := c.compressMessages(ctx, messages)
 			if err != nil {
-				return lastResponse, fmt.Errorf("conversation compression failed: %w", err)
+				return lastResponse, usage, fmt.Errorf("conversation compression failed: %w", err)
 			}
 			messages = compressed
 			slog.Info("compression completed", "count", len(messages))
@@ -114,11 +122,16 @@ func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionM
 			Tools:    c.tools,
 		})
 		if err != nil {
-			return "", fmt.Errorf("chat completion failed: %w", err)
+			return "", usage, fmt.Errorf("chat completion failed: %w", err)
 		}
 
+		// Accumulate token usage
+		usage.PromptTokens += int(resp.Usage.PromptTokens)
+		usage.CompletionTokens += int(resp.Usage.CompletionTokens)
+		usage.TotalTokens += int(resp.Usage.TotalTokens)
+
 		if len(resp.Choices) == 0 {
-			return "", fmt.Errorf("no response choices")
+			return "", usage, fmt.Errorf("no response choices")
 		}
 
 		choice := resp.Choices[0]
@@ -160,11 +173,11 @@ func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionM
 		// 如果调用了 FinishReview，结束对话
 		if finishRequested {
 			slog.Info("FinishReview called, ending conversation")
-			return lastResponse, nil
+			return lastResponse, usage, nil
 		}
 	}
 
-	return lastResponse, nil
+	return lastResponse, usage, nil
 }
 
 // compressMessages compresses conversation history
@@ -174,11 +187,10 @@ func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCom
 		return messages, nil
 	}
 
-	// Extract messages to compress (all except system prompt)
+	// Extract messages to compress (all except system prompt and initial user message)
 	messagesToCompress := messages[2:]
 
-	// 构建压缩请求
-	compressPrompt := `你是一个代码审核助手的对话压缩器。请将以下对话历史压缩为结构化摘要，供后续审核继续使用。
+	compressSystemPrompt := `你是一个代码审核助手的对话压缩器。请将以下对话历史压缩为结构化摘要，供后续审核继续使用。
 
 ## 压缩原则
 - 保留：审核结论、问题发现、进度状态等可执行信息
@@ -203,22 +215,14 @@ func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCom
 
 只输出摘要内容，不要添加额外说明。`
 
-	// Format messages to compress as text
-	var historyText strings.Builder
-	historyText.WriteString("Conversation history:\n\n")
-	for _, msg := range messagesToCompress {
-		fmt.Fprintf(&historyText, "- %v\n", msg)
-	}
-
-	// Call AI to generate compression summary
-	compressMessages := []openai.ChatCompletionMessageParamUnion{
-		openai.SystemMessage(compressPrompt),
-		openai.UserMessage(historyText.String()),
-	}
+	// Pass compression prompt + raw conversation history directly to AI
+	compressMsgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(messagesToCompress)+2)
+	compressMsgs = append(compressMsgs, openai.SystemMessage(compressSystemPrompt))
+	compressMsgs = append(compressMsgs, messagesToCompress...)
 
 	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model:    c.model,
-		Messages: compressMessages,
+		Messages: compressMsgs,
 	})
 	if err != nil {
 		slog.Error("conversation compression failed", "error", err)
@@ -228,13 +232,12 @@ func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCom
 	summary := resp.Choices[0].Message.Content
 	slog.Info("conversation compression completed", "summary_length", len(summary))
 
-	// Build compressed message list: system prompt + compression summary
+	// Build compressed message list: system prompt + initial message + summary
 	compressed := []openai.ChatCompletionMessageParamUnion{
-		messages[0], // System prompt
+		messages[0],
 		messages[1],
 		openai.UserMessage(fmt.Sprintf("[对话历史已压缩]\n\n%s\n\n请继续审核工作。", summary)),
 	}
-
 	return compressed, nil
 }
 

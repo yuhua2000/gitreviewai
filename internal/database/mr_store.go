@@ -38,13 +38,15 @@ func (s *MRStore) Upsert(ctx context.Context, mr *types.MergeRequest) (int64, er
 }
 
 func (s *MRStore) GetByID(ctx context.Context, id int64) (*types.MergeRequest, error) {
-	query := `SELECT id, project_id, mr_iid, title, description, source_branch, target_branch, state, web_url, review_status, created_at, updated_at
+	query := `SELECT id, project_id, mr_iid, title, description, source_branch, target_branch,
+		state, web_url, review_status, error_message, created_at, updated_at
 		FROM merge_requests WHERE id = ?`
 	return s.scanMR(s.db.QueryRowContext(ctx, query, id))
 }
 
 func (s *MRStore) GetByProjectAndIID(ctx context.Context, projectID string, mrIID int) (*types.MergeRequest, error) {
-	query := `SELECT id, project_id, mr_iid, title, description, source_branch, target_branch, state, web_url, review_status, created_at, updated_at
+	query := `SELECT id, project_id, mr_iid, title, description, source_branch, target_branch,
+		state, web_url, review_status, error_message, created_at, updated_at
 		FROM merge_requests WHERE project_id = ? AND mr_iid = ?`
 	return s.scanMR(s.db.QueryRowContext(ctx, query, projectID, mrIID))
 }
@@ -57,7 +59,8 @@ func (s *MRStore) List(ctx context.Context, offset, limit int) ([]*types.MergeRe
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, project_id, mr_iid, title, description, source_branch, target_branch, state, web_url, review_status, created_at, updated_at
+		`SELECT id, project_id, mr_iid, title, description, source_branch, target_branch,
+		state, web_url, review_status, error_message, created_at, updated_at
 		FROM merge_requests ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -75,9 +78,11 @@ func (s *MRStore) List(ctx context.Context, offset, limit int) ([]*types.MergeRe
 	return mrs, total, rows.Err()
 }
 
-func (s *MRStore) UpdateReviewStatus(ctx context.Context, id int64, status string) error {
+// UpdateReviewStatus updates the review status and optionally the error message.
+func (s *MRStore) UpdateReviewStatus(ctx context.Context, id int64, status string, errorMsg string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE merge_requests SET review_status = ?, updated_at = datetime('now') WHERE id = ?`, status, id)
+		`UPDATE merge_requests SET review_status = ?, error_message = ?, updated_at = datetime('now') WHERE id = ?`,
+		status, errorMsg, id)
 	return err
 }
 
@@ -85,7 +90,7 @@ func (s *MRStore) scanMR(row *sql.Row) (*types.MergeRequest, error) {
 	mr := &types.MergeRequest{}
 	err := row.Scan(&mr.ID, &mr.ProjectID, &mr.MRIID, &mr.Title, &mr.Description,
 		&mr.SourceBranch, &mr.TargetBranch, &mr.State, &mr.WebURL, &mr.ReviewStatus,
-		&mr.CreatedAt, &mr.UpdatedAt)
+		&mr.ErrorMessage, &mr.CreatedAt, &mr.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +101,7 @@ func (s *MRStore) scanMRRow(rows *sql.Rows) (*types.MergeRequest, error) {
 	mr := &types.MergeRequest{}
 	err := rows.Scan(&mr.ID, &mr.ProjectID, &mr.MRIID, &mr.Title, &mr.Description,
 		&mr.SourceBranch, &mr.TargetBranch, &mr.State, &mr.WebURL, &mr.ReviewStatus,
-		&mr.CreatedAt, &mr.UpdatedAt)
+		&mr.ErrorMessage, &mr.CreatedAt, &mr.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

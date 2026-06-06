@@ -23,3 +23,11 @@ export function submitAll(mrId) {
 export function getMRChanges(id, page = 1, pageSize = 20) {
   return client.get(`/mrs/${id}/changes`, { params: { page, page_size: pageSize } })
 }
+
+export function getReviewLogs(id) {
+  return client.get(`/mrs/${id}/review-logs`)
+}
+
+export function retryReview(id) {
+  return client.post(`/mrs/${id}/retry`)
+}
