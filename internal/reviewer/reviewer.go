@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,14 +19,27 @@ import (
 	"github.com/yuhua2000/gitreviewai/internal/types"
 )
 
+// ReviewRequest contains all info needed to start a review.
+type ReviewRequest struct {
+	ProjectID    string
+	MRIID        int
+	ProjectName  string
+	Description  string
+	IsDraft      bool
+	TargetBranch string
+	SourceBranch string
+}
+
 type Reviewer struct {
-	cfg          *config.Config
-	glClient     *gitlab.Client
-	aiClient     *ai.Client
-	mrStore      *database.MRStore
-	commentStore *database.CommentStore
-	reportStore  *database.ReportStore
-	settingStore *database.SettingStore
+	cfg                *config.Config
+	db                 *sql.DB
+	mrStore            *database.MRStore
+	commentStore       *database.CommentStore
+	reportStore        *database.ReportStore
+	settingStore       *database.SettingStore
+	aiModelStore       *database.AIModelStore
+	ruleStore          *database.ReviewRuleStore
+	projectConfigStore *database.ProjectConfigStore
 }
 
 type reviewState struct {
@@ -38,32 +53,70 @@ type reviewState struct {
 	finished       bool
 }
 
+// New creates a new Reviewer with all required stores.
 func New(cfg *config.Config, db *sql.DB) *Reviewer {
 	return &Reviewer{
-		cfg:          cfg,
-		glClient:     gitlab.NewClient(cfg.GitLabURL, cfg.GitLabToken),
-		aiClient:     ai.NewClient(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL),
-		mrStore:      database.NewMRStore(db),
-		commentStore: database.NewCommentStore(db),
-		reportStore:  database.NewReportStore(db),
-		settingStore: database.NewSettingStore(db),
+		cfg:                cfg,
+		db:                 db,
+		mrStore:            database.NewMRStore(db),
+		commentStore:       database.NewCommentStore(db),
+		reportStore:        database.NewReportStore(db),
+		settingStore:       database.NewSettingStore(db),
+		aiModelStore:       database.NewAIModelStore(db),
+		ruleStore:          database.NewReviewRuleStore(db),
+		projectConfigStore: database.NewProjectConfigStore(db),
 	}
 }
 
-func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) error {
-	slog.Info("review started", "project", projectID, "mr_iid", mrIID)
+// ReviewMR executes a code review for the given MR.
+func (r *Reviewer) ReviewMR(ctx context.Context, req ReviewRequest) error {
+	slog.Info("review started", "project", req.ProjectID, "mr_iid", req.MRIID)
 
-	// 1. Get MR info
-	mrInfo, err := r.glClient.GetMRInfo(ctx, projectID, mrIID)
+	// 1. Get global settings from DB (with config.yaml as fallback)
+	gitlabURL, _ := r.settingStore.GetGitLabURL(ctx, r.cfg.GitLabURL)
+	gitlabToken, _ := r.settingStore.GetGitLabToken(ctx, r.cfg.GitLabToken)
+	if gitlabToken == "" {
+		return fmt.Errorf("gitlab_token not configured, please set it in web UI or config.yaml")
+	}
+	globalIgnorePaths, _ := r.settingStore.GetIgnorePaths(ctx, r.cfg.IgnorePaths)
+	globalMaxComments, _ := r.settingStore.GetMaxLineComments(ctx, r.cfg.MaxLineComments)
+
+	// 2. Get or create project config (auto-create on first MR)
+	projectIDInt, _ := strconv.Atoi(req.ProjectID)
+	projectCfg, err := r.projectConfigStore.GetOrCreate(ctx, projectIDInt, req.ProjectName, req.Description)
+	if err != nil {
+		return fmt.Errorf("failed to get project config: %w", err)
+	}
+
+	// 3. Check trigger conditions
+	if !projectCfg.Enabled {
+		slog.Info("project disabled, skipping", "project", req.ProjectID)
+		return nil
+	}
+	if projectCfg.SkipDraft && req.IsDraft {
+		slog.Info("draft MR skipped", "project", req.ProjectID, "mr_iid", req.MRIID)
+		return nil
+	}
+	targetBranches := r.projectConfigStore.GetTargetBranches(projectCfg)
+	if len(targetBranches) > 0 && !containsString(targetBranches, req.TargetBranch) {
+		slog.Info("target branch not matched, skipping", "project", req.ProjectID, "target", req.TargetBranch)
+		return nil
+	}
+
+	// 4. Create GitLab client
+	glClient := gitlab.NewClient(gitlabURL, gitlabToken)
+
+	// 5. Get MR info from GitLab
+	mrInfo, err := glClient.GetMRInfo(ctx, req.ProjectID, req.MRIID)
 	if err != nil {
 		return fmt.Errorf("failed to get MR info: %w", err)
 	}
 	slog.Info("MR info retrieved", "title", mrInfo.Title, "state", mrInfo.State)
 
-	// 2. Upsert MR into database
+	// 6. Upsert MR into database
 	mrRecord := &types.MergeRequest{
-		ProjectID:    projectID,
-		MRIID:        mrIID,
+		ProjectID:    req.ProjectID,
+		MRIID:        req.MRIID,
 		Title:        mrInfo.Title,
 		Description:  mrInfo.Description,
 		SourceBranch: mrInfo.SourceBranch,
@@ -79,8 +132,8 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	}
 	slog.Info("MR persisted to database", "mr_id", mrID)
 
-	// 3. Get MR changes
-	changes, diffRefs, err := r.glClient.GetMRChanges(ctx, projectID, mrIID)
+	// 7. Get MR changes
+	changes, diffRefs, err := glClient.GetMRChanges(ctx, req.ProjectID, req.MRIID)
 	if err != nil {
 		if updateErr := r.mrStore.UpdateReviewStatus(ctx, mrID, "failed"); updateErr != nil {
 			slog.Error("failed to update review status", "mr_id", mrID, "error", updateErr)
@@ -89,26 +142,70 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	}
 	slog.Info("found changed files", "count", len(changes))
 
-	// 4. Filter changes
-	filteredChanges := r.filterChanges(changes)
+	// 8. Merge ignore paths (global + project-level)
+	ignorePaths := globalIgnorePaths
+	projectIgnorePaths := r.projectConfigStore.GetIgnorePaths(projectCfg)
+	if len(projectIgnorePaths) > 0 {
+		ignorePaths = append(ignorePaths, projectIgnorePaths...)
+	}
+
+	// 9. Filter changes
+	filteredChanges := r.filterChanges(changes, ignorePaths)
 	slog.Info("files to review after filtering", "count", len(filteredChanges))
 
-	// 5. Initialize review state
+	// 10. Get AI model config
+	apiKey := r.cfg.OpenAIAPIKey
+	modelName := r.cfg.OpenAIModel
+	baseURL := r.cfg.OpenAIBaseURL
+	if projectCfg.AIModelID != nil {
+		aiModel, err := r.aiModelStore.GetByID(ctx, *projectCfg.AIModelID)
+		if err == nil && aiModel.Enabled {
+			apiKey = aiModel.APIKey
+			modelName = aiModel.ModelName
+			baseURL = aiModel.BaseURL
+		}
+	} else {
+		// Try default model
+		defaultModel, _ := r.aiModelStore.GetDefault(ctx)
+		if defaultModel != nil {
+			apiKey = defaultModel.APIKey
+			modelName = defaultModel.ModelName
+			baseURL = defaultModel.BaseURL
+		}
+	}
+	if apiKey == "" {
+		return fmt.Errorf("AI API key not configured, please set it in web UI (AI Models) or config.yaml")
+	}
+	aiClient := ai.NewClient(apiKey, modelName, baseURL)
+
+	// 11. Get enabled rules for this project
+	var rules []*types.ReviewRule
+	if projectCfg.ID > 0 {
+		rules, _ = r.ruleStore.GetEnabledRulesForProject(ctx, projectCfg.ID)
+	}
+	if len(rules) == 0 {
+		rules, _ = r.ruleStore.GetEnabledRules(ctx)
+	}
+
+	// 12. Build dynamic system prompt
+	systemPrompt := ai.BuildSystemPrompt(rules, projectCfg.CustomPrompt)
+
+	// 13. Initialize review state
 	state := &reviewState{
-		projectID:    projectID,
+		projectID:    req.ProjectID,
 		sourceBranch: mrInfo.SourceBranch,
 		changes:      filteredChanges,
 	}
 
-	// 6. Prepare initial changes summary
+	// 14. Prepare initial changes summary
 	initialSummary, remaining := r.formatInitialChangesSummary(filteredChanges, 10)
 
-	// 7. Prepare tool handler
+	// 15. Prepare tool handler (with glClient closure)
 	toolHandler := func(name string, args json.RawMessage) (string, error) {
-		return r.handleToolCall(ctx, state, name, args)
+		return r.handleToolCall(ctx, glClient, state, name, args)
 	}
 
-	// 8. Build initial message
+	// 16. Build initial message
 	initialMessage := ai.FormatInitialMessage(
 		mrInfo.Title,
 		mrInfo.Description,
@@ -122,8 +219,8 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 			state.changesSent, remaining)
 	}
 
-	// 9. Execute AI review
-	response, err := r.aiClient.ChatWithLimit(ctx, ai.SystemPrompt(), initialMessage, toolHandler, 50)
+	// 17. Execute AI review
+	response, err := aiClient.ChatWithLimit(ctx, systemPrompt, initialMessage, toolHandler, 50)
 	if err != nil {
 		if updateErr := r.mrStore.UpdateReviewStatus(ctx, mrID, "failed"); updateErr != nil {
 			slog.Error("failed to update review status", "mr_id", mrID, "error", updateErr)
@@ -132,13 +229,19 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	}
 	slog.Info("AI review completed", "response_length", len(response))
 
-	// 10. Persist results to database
-	autoSubmit, _ := r.settingStore.GetAutoSubmit(ctx)
+	// 18. Determine max line comments (project override or global)
+	maxComments := globalMaxComments
+	if projectCfg.MaxLineComments != nil {
+		maxComments = *projectCfg.MaxLineComments
+	}
+
+	// 19. Persist results to database
+	autoSubmit := projectCfg.AutoSubmit
 
 	lineComments := state.lineComments
-	if len(lineComments) > r.cfg.MaxLineComments {
-		slog.Warn("line comments exceed limit, truncating", "total", len(lineComments), "max", r.cfg.MaxLineComments)
-		lineComments = lineComments[:r.cfg.MaxLineComments]
+	if len(lineComments) > maxComments {
+		slog.Warn("line comments exceed limit, truncating", "total", len(lineComments), "max", maxComments)
+		lineComments = lineComments[:maxComments]
 	}
 
 	// Build diff map for context extraction
@@ -147,7 +250,7 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 		diffMap[change.NewPath] = change.Diff
 	}
 
-	// 10a. Persist line comments
+	// 19a. Persist line comments
 	for _, lc := range lineComments {
 		diffContext := ExtractDiffContext(diffMap[lc.File], lc.Line, 8)
 		comment := &types.Comment{
@@ -167,11 +270,11 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 		comment.ID = commentID
 
 		if autoSubmit {
-			r.submitSingleLineComment(ctx, projectID, mrIID, diffRefs, lc, commentID)
+			r.submitSingleLineComment(ctx, glClient, req.ProjectID, req.MRIID, diffRefs, lc, commentID)
 		}
 	}
 
-	// 10b. Persist review comments
+	// 19b. Persist review comments
 	for _, rc := range state.reviewComments {
 		comment := &types.Comment{
 			MRID:        mrID,
@@ -187,11 +290,11 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 		comment.ID = commentID
 
 		if autoSubmit {
-			r.submitSingleReviewComment(ctx, projectID, mrIID, rc, commentID)
+			r.submitSingleReviewComment(ctx, glClient, req.ProjectID, req.MRIID, rc, commentID)
 		}
 	}
 
-	// 10c. Persist report
+	// 19c. Persist report
 	if state.report != "" {
 		report := &types.Report{
 			MRID:    mrID,
@@ -203,19 +306,19 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 			slog.Error("failed to create report", "error", err)
 		} else {
 			if autoSubmit {
-				r.submitSingleReport(ctx, projectID, mrIID, state.report, reportID)
+				r.submitSingleReport(ctx, glClient, req.ProjectID, req.MRIID, state.report, reportID)
 			}
 		}
 	}
 
-	// 11. Update MR status
+	// 20. Update MR status
 	if err := r.mrStore.UpdateReviewStatus(ctx, mrID, "completed"); err != nil {
 		slog.Error("failed to update review status", "mr_id", mrID, "error", err)
 	}
 
 	slog.Info("review completed",
-		"project", projectID,
-		"mr_iid", mrIID,
+		"project", req.ProjectID,
+		"mr_iid", req.MRIID,
 		"mr_id", mrID,
 		"line_comments", len(lineComments),
 		"review_comments", len(state.reviewComments),
@@ -224,8 +327,8 @@ func (r *Reviewer) ReviewMR(ctx context.Context, projectID string, mrIID int) er
 	return nil
 }
 
-func (r *Reviewer) submitSingleLineComment(ctx context.Context, projectID string, mrIID int,
-	diffRefs *gitlab.DiffRefs, comment ai.LineCommentResult, commentID int64) {
+func (r *Reviewer) submitSingleLineComment(ctx context.Context, glClient *gitlab.Client,
+	projectID string, mrIID int, diffRefs *gitlab.DiffRefs, comment ai.LineCommentResult, commentID int64) {
 
 	draft := gitlab.DraftNote{
 		Note: comment.Message,
@@ -239,13 +342,13 @@ func (r *Reviewer) submitSingleLineComment(ctx context.Context, projectID string
 			NewLine:      comment.Line,
 		},
 	}
-	draftID, err := r.glClient.CreateDraftNote(ctx, projectID, mrIID, draft)
+	draftID, err := glClient.CreateDraftNote(ctx, projectID, mrIID, draft)
 	if err != nil {
 		slog.Error("failed to create draft note", "file", comment.File, "line", comment.Line, "error", err)
 		return
 	}
 
-	if err := r.glClient.PublishDraftNote(ctx, projectID, mrIID, draftID); err != nil {
+	if err := glClient.PublishDraftNote(ctx, projectID, mrIID, draftID); err != nil {
 		slog.Error("failed to publish draft note", "file", comment.File, "line", comment.Line, "draft_id", draftID, "error", err)
 		return
 	}
@@ -257,10 +360,10 @@ func (r *Reviewer) submitSingleLineComment(ctx context.Context, projectID string
 	slog.Info("line comment submitted", "file", comment.File, "line", comment.Line, "draft_id", draftID)
 }
 
-func (r *Reviewer) submitSingleReviewComment(ctx context.Context, projectID string, mrIID int,
-	content string, commentID int64) {
+func (r *Reviewer) submitSingleReviewComment(ctx context.Context, glClient *gitlab.Client,
+	projectID string, mrIID int, content string, commentID int64) {
 
-	noteID, err := r.glClient.PostMRNote(ctx, projectID, mrIID, content)
+	noteID, err := glClient.PostMRNote(ctx, projectID, mrIID, content)
 	if err != nil {
 		slog.Error("failed to post review comment", "error", err)
 		return
@@ -273,8 +376,8 @@ func (r *Reviewer) submitSingleReviewComment(ctx context.Context, projectID stri
 	slog.Info("review comment submitted", "note_id", noteID)
 }
 
-func (r *Reviewer) submitSingleReport(ctx context.Context, projectID string, mrIID int,
-	content string, reportID int64) {
+func (r *Reviewer) submitSingleReport(ctx context.Context, glClient *gitlab.Client,
+	projectID string, mrIID int, content string, reportID int64) {
 
 	reportBody := fmt.Sprintf(`# MR 审核报告
 
@@ -289,7 +392,7 @@ func (r *Reviewer) submitSingleReport(ctx context.Context, projectID string, mrI
 		time.Now().Format("2006-01-02 15:04:05"),
 		content)
 
-	noteID, err := r.glClient.PostMRNote(ctx, projectID, mrIID, reportBody)
+	noteID, err := glClient.PostMRNote(ctx, projectID, mrIID, reportBody)
 	if err != nil {
 		slog.Error("failed to post report", "error", err)
 		return
@@ -302,18 +405,13 @@ func (r *Reviewer) submitSingleReport(ctx context.Context, projectID string, mrI
 	slog.Info("report submitted", "note_id", noteID)
 }
 
-// GetStores returns the database stores for use by API handlers
+// GetStores returns the database stores for use by API handlers.
 func (r *Reviewer) GetStores() (*database.MRStore, *database.CommentStore, *database.ReportStore, *database.SettingStore) {
 	return r.mrStore, r.commentStore, r.reportStore, r.settingStore
 }
 
-// GetGitLabClient returns the GitLab client for use by API handlers
-func (r *Reviewer) GetGitLabClient() *gitlab.Client {
-	return r.glClient
-}
-
-// filterChanges intelligently filters changed files
-func (r *Reviewer) filterChanges(changes []gitlab.MRChange) []gitlab.MRChange {
+// filterChanges intelligently filters changed files.
+func (r *Reviewer) filterChanges(changes []gitlab.MRChange, ignorePaths []string) []gitlab.MRChange {
 	stats := r.analyzeChanges(changes)
 	slog.Info("file analysis",
 		"total", len(changes),
@@ -324,12 +422,12 @@ func (r *Reviewer) filterChanges(changes []gitlab.MRChange) []gitlab.MRChange {
 		"docs", stats.Docs)
 
 	if len(changes) <= 20 {
-		return r.filterByIgnorePaths(changes)
+		return r.filterByIgnorePaths(changes, ignorePaths)
 	}
 
 	var filtered []gitlab.MRChange
 	for _, change := range changes {
-		if r.shouldIgnoreByConfig(change.NewPath) {
+		if shouldIgnore(change.NewPath, ignorePaths) {
 			continue
 		}
 
@@ -359,7 +457,7 @@ func (r *Reviewer) filterChanges(changes []gitlab.MRChange) []gitlab.MRChange {
 	}
 
 	if len(filtered) < 5 {
-		return r.filterByIgnorePaths(changes)
+		return r.filterByIgnorePaths(changes, ignorePaths)
 	}
 
 	return filtered
@@ -395,8 +493,8 @@ func (r *Reviewer) analyzeChanges(changes []gitlab.MRChange) ChangeStats {
 	return stats
 }
 
-func (r *Reviewer) classifyFile(path string) string {
-	lowerPath := strings.ToLower(path)
+func (r *Reviewer) classifyFile(p string) string {
+	lowerPath := strings.ToLower(p)
 
 	if strings.HasSuffix(lowerPath, "_test.go") ||
 		strings.HasSuffix(lowerPath, ".test.js") ||
@@ -461,19 +559,29 @@ func (r *Reviewer) classifyFile(path string) string {
 	return "business"
 }
 
-func (r *Reviewer) filterByIgnorePaths(changes []gitlab.MRChange) []gitlab.MRChange {
+func (r *Reviewer) filterByIgnorePaths(changes []gitlab.MRChange, ignorePaths []string) []gitlab.MRChange {
 	var filtered []gitlab.MRChange
 	for _, change := range changes {
-		if !r.shouldIgnoreByConfig(change.NewPath) {
+		if !shouldIgnore(change.NewPath, ignorePaths) {
 			filtered = append(filtered, change)
 		}
 	}
 	return filtered
 }
 
-func (r *Reviewer) shouldIgnoreByConfig(path string) bool {
-	for _, ignorePath := range r.cfg.IgnorePaths {
-		if strings.HasPrefix(path, ignorePath+"/") || path == ignorePath {
+// shouldIgnore checks if a path should be ignored. Supports glob patterns and prefix matching.
+func shouldIgnore(filePath string, ignorePaths []string) bool {
+	for _, ignorePath := range ignorePaths {
+		// Try glob match first
+		if matched, _ := path.Match(ignorePath, filePath); matched {
+			return true
+		}
+		// Try matching against path segments (prefix match for directories)
+		if strings.HasPrefix(filePath, ignorePath+"/") || filePath == ignorePath {
+			return true
+		}
+		// Try matching just the filename
+		if matched, _ := path.Match(ignorePath, path.Base(filePath)); matched {
 			return true
 		}
 	}
@@ -553,7 +661,7 @@ func (r *Reviewer) formatMoreChanges(state *reviewState, batchSize int) (string,
 	return sb.String(), remaining
 }
 
-func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
+func (r *Reviewer) handleToolCall(ctx context.Context, glClient *gitlab.Client, state *reviewState,
 	name string, args json.RawMessage) (string, error) {
 
 	slog.Debug("tool call received", "tool", name, "args", string(args))
@@ -593,7 +701,7 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 			return "", fmt.Errorf("解析参数失败: %w", err)
 		}
 		slog.Debug("ReadFile", "path", params.Path, "start_line", params.StartLine, "end_line", params.EndLine)
-		content, err := r.glClient.GetFileContent(ctx, state.projectID, state.sourceBranch, params.Path)
+		content, err := glClient.GetFileContent(ctx, state.projectID, state.sourceBranch, params.Path)
 		if err != nil {
 			slog.Warn("ReadFile failed", "path", params.Path, "error", err)
 			return fmt.Sprintf("读取文件失败: %v", err), nil
@@ -647,7 +755,7 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 			return "", fmt.Errorf("解析参数失败: %w", err)
 		}
 		slog.Debug("FindInFile", "path", params.Path, "pattern", params.Pattern)
-		content, err := r.glClient.GetFileContent(ctx, state.projectID, state.sourceBranch, params.Path)
+		content, err := glClient.GetFileContent(ctx, state.projectID, state.sourceBranch, params.Path)
 		if err != nil {
 			slog.Warn("FindInFile failed", "path", params.Path, "error", err)
 			return fmt.Sprintf("读取文件失败: %v", err), nil
@@ -724,4 +832,14 @@ func (r *Reviewer) handleToolCall(ctx context.Context, state *reviewState,
 		slog.Warn("unknown tool", "name", name)
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
+}
+
+// containsString checks if a string slice contains a value.
+func containsString(slice []string, val string) bool {
+	for _, s := range slice {
+		if s == val {
+			return true
+		}
+	}
+	return false
 }

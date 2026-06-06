@@ -65,9 +65,9 @@ data/
 *.db
 
 # Frontend
-internal/api/frontend/node_modules/
-internal/api/frontend/dist/*
-!internal/api/frontend/dist/.gitkeep
+frontend/node_modules/
+frontend/dist/*
+!frontend/dist/.gitkeep
 
 # Binary
 gitreviewai

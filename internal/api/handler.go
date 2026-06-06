@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -17,35 +19,52 @@ import (
 	"github.com/yuhua2000/gitreviewai/internal/reviewer"
 )
 
-//go:embed all:frontend/dist
-var frontendFS embed.FS
-
 type Handler struct {
-	cfg          *config.Config
-	mrStore      *database.MRStore
-	commentStore *database.CommentStore
-	reportStore  *database.ReportStore
-	settingStore *database.SettingStore
-	glClient     *gitlab.Client
+	cfg                *config.Config
+	mrStore            *database.MRStore
+	commentStore       *database.CommentStore
+	reportStore        *database.ReportStore
+	settingStore       *database.SettingStore
+	aiModelStore       *database.AIModelStore
+	ruleStore          *database.ReviewRuleStore
+	projectConfigStore *database.ProjectConfigStore
+	frontendFS         embed.FS
 }
 
-func NewHandler(cfg *config.Config, db *sql.DB, rev *reviewer.Reviewer) *Handler {
+func NewHandler(cfg *config.Config, db *sql.DB, rev *reviewer.Reviewer, frontendFS embed.FS) *Handler {
 	mrStore, commentStore, reportStore, settingStore := rev.GetStores()
 	return &Handler{
-		cfg:          cfg,
-		mrStore:      mrStore,
-		commentStore: commentStore,
-		reportStore:  reportStore,
-		settingStore: settingStore,
-		glClient:     rev.GetGitLabClient(),
+		cfg:                cfg,
+		mrStore:            mrStore,
+		commentStore:       commentStore,
+		reportStore:        reportStore,
+		settingStore:       settingStore,
+		aiModelStore:       database.NewAIModelStore(db),
+		ruleStore:          database.NewReviewRuleStore(db),
+		projectConfigStore: database.NewProjectConfigStore(db),
+		frontendFS:         frontendFS,
 	}
+}
+
+// getGitLabClient creates a GitLab client from current settings.
+func (h *Handler) getGitLabClient(ctx context.Context) *gitlab.Client {
+	gitlabURL, _ := h.settingStore.GetGitLabURL(ctx, h.cfg.GitLabURL)
+	gitlabToken, _ := h.settingStore.GetGitLabToken(ctx, h.cfg.GitLabToken)
+	return gitlab.NewClient(gitlabURL, gitlabToken)
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	// API routes
 	api := r.Group("/api")
 	{
-		api.POST("/login", auth.GinLoginHandler(h.cfg.Password, h.cfg.JWTSecret, h.cfg.JWTExpiryDuration()))
+		api.POST("/login", auth.GinLoginHandler(h.cfg.Password, h.cfg.JWTSecret, func() time.Duration {
+			expiryStr, _ := h.settingStore.GetJWTExpiry(context.Background(), h.cfg.JWTExpiry)
+			d, err := time.ParseDuration(expiryStr)
+			if err != nil {
+				return 24 * time.Hour
+			}
+			return d
+		}))
 
 		// Authenticated routes
 		authorized := api.Group("")
@@ -59,11 +78,31 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 			authorized.POST("/mrs/:id/submit-all", h.submitAllPending)
 			authorized.GET("/settings", h.getSettings)
 			authorized.PUT("/settings", h.updateSettings)
+
+			// AI model management
+			authorized.GET("/ai-models", h.listAIModels)
+			authorized.POST("/ai-models", h.createAIModel)
+			authorized.PUT("/ai-models/:id", h.updateAIModel)
+			authorized.DELETE("/ai-models/:id", h.deleteAIModel)
+			authorized.POST("/ai-models/:id/set-default", h.setDefaultModel)
+
+			// Review rule management
+			authorized.GET("/rules", h.listRules)
+			authorized.POST("/rules", h.createRule)
+			authorized.PUT("/rules/:id", h.updateRule)
+			authorized.DELETE("/rules/:id", h.deleteRule)
+			authorized.PUT("/rules/:id/toggle", h.toggleRule)
+
+			// Project config management
+			authorized.GET("/project-configs", h.listProjectConfigs)
+			authorized.GET("/project-configs/:project_id", h.getProjectConfig)
+			authorized.PUT("/project-configs/:project_id", h.updateProjectConfig)
+			authorized.PUT("/project-configs/:project_id/rules", h.updateProjectRules)
 		}
 	}
 
 	// Serve frontend SPA
-	distFS, err := fs.Sub(frontendFS, "frontend/dist")
+	distFS, err := fs.Sub(h.frontendFS, "dist")
 	if err != nil {
 		slog.Warn("frontend not embedded", "error", err)
 		return

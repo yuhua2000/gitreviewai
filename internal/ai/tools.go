@@ -1,5 +1,12 @@
 package ai
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/yuhua2000/gitreviewai/internal/types"
+)
+
 // LineCommentResult 行级评论结果
 type LineCommentResult struct {
 	File    string `json:"file"`
@@ -88,9 +95,12 @@ func ToolDefinitions() []ToolDef {
 	}
 }
 
-// SystemPrompt 返回系统提示词
-func SystemPrompt() string {
-	return `你是一个专业的代码审核专家，负责审查 Merge Request 的代码变更，提供详细、可操作的反馈。
+// BuildSystemPrompt dynamically builds a system prompt with enabled rules and custom prompt.
+func BuildSystemPrompt(rules []*types.ReviewRule, customPrompt string) string {
+	var sb strings.Builder
+
+	// Base prompt (capabilities, workflow, constraints, output format)
+	sb.WriteString(`你是一个专业的代码审核专家，负责审查 Merge Request 的代码变更，提供详细、可操作的反馈。
 
 ## 你的能力
 - 使用 ReadFile 读取文件完整内容
@@ -101,36 +111,6 @@ func SystemPrompt() string {
 - 使用 GenerateMDReport 生成审核汇总报告
 - 使用 GetMoreChanges 获取更多变更文件内容（当变更被截断时）
 - 使用 FinishReview 完成本次审核
-
-## 审核重点
-
-### 必须检查（严重问题）
-1. **逻辑错误** - 条件判断错误、循环边界问题、空值未处理
-2. **安全漏洞** - SQL注入、XSS、敏感信息泄露、权限绕过
-3. **并发问题** - 竞态条件、死锁、资源未释放
-4. **错误处理** - 异常吞没、错误未传播、资源泄漏
-5. **数据一致性** - 事务缺失、状态不同步
-
-### 建议检查（中等问题）
-1. **性能问题** - 不必要的循环、内存分配、N+1查询
-2. **代码规范** - 命名不清晰、魔法数字、重复代码
-3. **可维护性** - 过长函数、复杂嵌套、缺少注释
-4. **代码格式** - 缩进不一致、行尾空格、缺少空行、import 排序
-
-### 可以忽略
-1. 纯格式化变更（空格、缩进、换行）
-2. 自动生成的代码（protobuf、swagger、mock）
-3. 依赖文件更新（go.mod、package-lock.json）
-4. 测试数据文件（fixture、snapshot）
-5. 文档类文件（README、CHANGELOG）
-
-### 变动较大时的策略
-当变更文件超过 20 个时：
-- 优先审核核心业务逻辑文件
-- 跳过纯配置文件（.yaml/.json/.toml）
-- 跳过测试文件（*_test.go, *.test.js）
-- 跳过前端资源（.css/.scss/.svg）
-- 关注新增/修改的业务代码，忽略简单的重命名
 
 ## 工作流程
 1. 仔细分析提供的变更内容（diff）
@@ -158,5 +138,57 @@ func SystemPrompt() string {
 ## 输出格式
 - 报告使用 Markdown 格式
 - 按严重程度分组：error > warning > info
-- 每个问题包含：文件路径、行号、问题描述、修改建议`
+- 每个问题包含：文件路径、行号、问题描述、修改建议`)
+
+	// Dynamic rules section
+	if len(rules) > 0 {
+		sb.WriteString("\n\n## 审核规则\n\n")
+
+		errorRules := filterBySeverity(rules, "error")
+		warningRules := filterBySeverity(rules, "warning")
+		infoRules := filterBySeverity(rules, "info")
+
+		if len(errorRules) > 0 {
+			sb.WriteString("### 必须检查（严重问题）\n")
+			for i, r := range errorRules {
+				fmt.Fprintf(&sb, "%d. **%s** - %s\n", i+1, r.Name, r.Description)
+			}
+			sb.WriteString("\n")
+		}
+
+		if len(warningRules) > 0 {
+			sb.WriteString("### 建议检查（中等问题）\n")
+			for i, r := range warningRules {
+				fmt.Fprintf(&sb, "%d. **%s** - %s\n", i+1, r.Name, r.Description)
+			}
+			sb.WriteString("\n")
+		}
+
+		if len(infoRules) > 0 {
+			sb.WriteString("### 可选检查（轻微问题）\n")
+			for i, r := range infoRules {
+				fmt.Fprintf(&sb, "%d. **%s** - %s\n", i+1, r.Name, r.Description)
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// Custom prompt
+	if customPrompt != "" {
+		sb.WriteString("\n## 项目自定义要求\n\n")
+		sb.WriteString(customPrompt)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func filterBySeverity(rules []*types.ReviewRule, severity string) []*types.ReviewRule {
+	var result []*types.ReviewRule
+	for _, r := range rules {
+		if r.Severity == severity {
+			result = append(result, r)
+		}
+	}
+	return result
 }

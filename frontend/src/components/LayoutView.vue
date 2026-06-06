@@ -40,6 +40,10 @@ const authStore = useAuthStore()
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/mrs')) return '/mrs'
+  if (route.path.startsWith('/projects')) return '/projects'
+  if (route.path.startsWith('/settings/models')) return '/settings/models'
+  if (route.path.startsWith('/settings/rules')) return '/settings/rules'
+  if (route.path.startsWith('/settings/general')) return '/settings/general'
   if (route.path === '/settings') return '/settings'
   return '/mrs'
 })
@@ -50,8 +54,26 @@ const menuOptions = [
     key: '/mrs',
   },
   {
-    label: '设置',
+    label: '项目管理',
+    key: '/projects',
+  },
+  {
+    label: '全局设置',
     key: '/settings',
+    children: [
+      {
+        label: '基本设置',
+        key: '/settings/general',
+      },
+      {
+        label: 'AI 模型',
+        key: '/settings/models',
+      },
+      {
+        label: '审核规则',
+        key: '/settings/rules',
+      },
+    ],
   },
 ]
 

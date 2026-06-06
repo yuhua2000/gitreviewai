@@ -33,6 +33,9 @@ type Config struct {
 	JWTSecret string `yaml:"jwt_secret"`
 	JWTExpiry string `yaml:"jwt_expiry"`
 	DBPath    string `yaml:"db_path"`
+
+	// 加密密钥 (Phase 3)
+	EncryptKey string `yaml:"encrypt_key"`
 }
 
 func Load(path string) (*Config, error) {

@@ -67,11 +67,10 @@ The service is a single Go binary that serves both the API and embedded Vue fron
 9. **`internal/api/`** — API handlers and embedded frontend:
    - `handler.go` — Route registration, serves embedded Vue SPA
    - `mr_handlers.go` — MR list, detail, comment/report submission endpoints
-   - `frontend/` — Vue 3 frontend (embedded via `go:embed`)
 
 10. **`cmd/server/main.go`** — Entrypoint. Loads config, validates required fields, opens database, creates reviewer with DB access, sets up gin router with auth middleware, registers routes, runs with graceful shutdown.
 
-**Frontend (`internal/api/frontend/`):**
+**Frontend (`frontend/`):**
 
 - Vue 3 + Vite + Naive UI
 - Pages: Login, MR List, MR Detail, Settings

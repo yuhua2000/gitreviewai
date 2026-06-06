@@ -42,7 +42,14 @@ type SubmitAllResult struct {
 
 // SettingsData 设置响应
 type SettingsData struct {
-	AutoSubmit bool `json:"auto_submit"`
+	GitLabURL       string   `json:"gitlab_url"`
+	GitLabToken     string   `json:"gitlab_token"` // masked
+	IgnorePaths     []string `json:"ignore_paths"`
+	MaxLineComments int      `json:"max_line_comments"`
+	AutoSubmit      bool     `json:"auto_submit"`
+	WebhookToken    string   `json:"webhook_token"` // masked
+	LogLevel        string   `json:"log_level"`
+	JWTExpiry       string   `json:"jwt_expiry"`
 }
 
 // LoginData 登录响应
@@ -52,5 +59,21 @@ type LoginData struct {
 
 // UpdateSettingsRequest 更新设置请求
 type UpdateSettingsRequest struct {
-	AutoSubmit *bool `json:"auto_submit"`
+	GitLabURL       *string  `json:"gitlab_url"`
+	GitLabToken     *string  `json:"gitlab_token"`
+	IgnorePaths     []string `json:"ignore_paths"`
+	MaxLineComments *int     `json:"max_line_comments"`
+	AutoSubmit      *bool    `json:"auto_submit"`
+	WebhookToken    *string  `json:"webhook_token"`
+	LogLevel        *string  `json:"log_level"`
+	JWTExpiry       *string  `json:"jwt_expiry"`
+}
+
+// GlobalSettings 全局业务配置聚合
+type GlobalSettings struct {
+	GitLabURL       string   `json:"gitlab_url"`
+	GitLabToken     string   `json:"gitlab_token"`
+	IgnorePaths     []string `json:"ignore_paths"`
+	MaxLineComments int      `json:"max_line_comments"`
+	AutoSubmit      bool     `json:"auto_submit"`
 }

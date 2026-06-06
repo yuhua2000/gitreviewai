@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: internal/api/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -29,7 +29,7 @@ jobs:
 
       - name: Build frontend
         run: |
-          cd internal/api/frontend
+          cd frontend
           npm install
           npm run build
 

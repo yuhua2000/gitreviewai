@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/yuhua2000/gitreviewai/internal/crypto"
 	"github.com/yuhua2000/gitreviewai/internal/gitlab"
 	"github.com/yuhua2000/gitreviewai/internal/types"
 )
@@ -105,7 +106,7 @@ func (h *Handler) submitComment(c *gin.Context) {
 
 	if comment.CommentType == "line" {
 		// Need diff refs for line comments - fetch from GitLab
-		_, diffRefs, err := h.glClient.GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
+		_, diffRefs, err := h.getGitLabClient(c.Request.Context()).GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
 		if err != nil {
 			slog.Error("failed to get MR changes for diff refs", "error", err)
 			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to get MR changes"))
@@ -124,14 +125,14 @@ func (h *Handler) submitComment(c *gin.Context) {
 				NewLine:      comment.LineNumber,
 			},
 		}
-		draftID, err := h.glClient.CreateDraftNote(ctx, mr.ProjectID, mr.MRIID, draft)
+		draftID, err := h.getGitLabClient(c.Request.Context()).CreateDraftNote(ctx, mr.ProjectID, mr.MRIID, draft)
 		if err != nil {
 			slog.Error("failed to create draft note", "error", err)
 			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to create draft note"))
 			return
 		}
 
-		if err := h.glClient.PublishDraftNote(ctx, mr.ProjectID, mr.MRIID, draftID); err != nil {
+		if err := h.getGitLabClient(c.Request.Context()).PublishDraftNote(ctx, mr.ProjectID, mr.MRIID, draftID); err != nil {
 			slog.Error("failed to publish draft note", "error", err)
 			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to publish draft note"))
 			return
@@ -148,7 +149,7 @@ func (h *Handler) submitComment(c *gin.Context) {
 			return
 		}
 	} else {
-		noteID, err := h.glClient.PostMRNote(ctx, mr.ProjectID, mr.MRIID, comment.Content)
+		noteID, err := h.getGitLabClient(c.Request.Context()).PostMRNote(ctx, mr.ProjectID, mr.MRIID, comment.Content)
 		if err != nil {
 			slog.Error("failed to post review comment", "error", err)
 			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to post comment"))
@@ -213,7 +214,7 @@ func (h *Handler) submitReport(c *gin.Context) {
 		time.Now().Format("2006-01-02 15:04:05"),
 		report.Content)
 
-	noteID, err := h.glClient.PostMRNote(ctx, mr.ProjectID, mr.MRIID, reportBody)
+	noteID, err := h.getGitLabClient(c.Request.Context()).PostMRNote(ctx, mr.ProjectID, mr.MRIID, reportBody)
 	if err != nil {
 		slog.Error("failed to post report", "error", err)
 		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to post report"))
@@ -254,7 +255,7 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 	defer cancel()
 
 	// Get diff refs for line comments
-	_, diffRefs, err := h.glClient.GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
+	_, diffRefs, err := h.getGitLabClient(c.Request.Context()).GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
 	if err != nil {
 		slog.Error("failed to get MR changes", "error", err)
 		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to get MR changes"))
@@ -286,11 +287,11 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 					NewLine:      comment.LineNumber,
 				},
 			}
-			draftID, err := h.glClient.CreateDraftNote(ctx, mr.ProjectID, mr.MRIID, draft)
+			draftID, err := h.getGitLabClient(c.Request.Context()).CreateDraftNote(ctx, mr.ProjectID, mr.MRIID, draft)
 			if err != nil {
 				submitErr = err
 			} else {
-				if err := h.glClient.PublishDraftNote(ctx, mr.ProjectID, mr.MRIID, draftID); err != nil {
+				if err := h.getGitLabClient(c.Request.Context()).PublishDraftNote(ctx, mr.ProjectID, mr.MRIID, draftID); err != nil {
 					submitErr = err
 				} else {
 					draftID64 := int64(draftID)
@@ -302,7 +303,7 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 				}
 			}
 		} else {
-			noteID, err := h.glClient.PostMRNote(ctx, mr.ProjectID, mr.MRIID, comment.Content)
+			noteID, err := h.getGitLabClient(c.Request.Context()).PostMRNote(ctx, mr.ProjectID, mr.MRIID, comment.Content)
 			if err != nil {
 				submitErr = err
 			} else {
@@ -340,7 +341,7 @@ func (h *Handler) submitAllPending(c *gin.Context) {
 			time.Now().Format("2006-01-02 15:04:05"),
 			report.Content)
 
-		noteID, err := h.glClient.PostMRNote(ctx, mr.ProjectID, mr.MRIID, reportBody)
+		noteID, err := h.getGitLabClient(c.Request.Context()).PostMRNote(ctx, mr.ProjectID, mr.MRIID, reportBody)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("report %d: %v", report.ID, err))
 		} else {
@@ -376,7 +377,7 @@ func (h *Handler) getMRChanges(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	changes, _, err := h.glClient.GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
+	changes, _, err := h.getGitLabClient(c.Request.Context()).GetMRChanges(ctx, mr.ProjectID, mr.MRIID)
 	if err != nil {
 		slog.Error("failed to get MR changes", "error", err)
 		c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to get MR changes"))
@@ -405,9 +406,26 @@ func (h *Handler) getMRChanges(c *gin.Context) {
 }
 
 func (h *Handler) getSettings(c *gin.Context) {
-	autoSubmit, _ := h.settingStore.GetAutoSubmit(c.Request.Context())
+	ctx := c.Request.Context()
+
+	autoSubmit, _ := h.settingStore.GetAutoSubmit(ctx)
+	gitlabURL, _ := h.settingStore.GetGitLabURL(ctx, h.cfg.GitLabURL)
+	gitlabToken, _ := h.settingStore.GetGitLabToken(ctx, h.cfg.GitLabToken)
+	ignorePaths, _ := h.settingStore.GetIgnorePaths(ctx, h.cfg.IgnorePaths)
+	maxComments, _ := h.settingStore.GetMaxLineComments(ctx, h.cfg.MaxLineComments)
+	webhookToken, _ := h.settingStore.GetWebhookToken(ctx, h.cfg.WebhookToken)
+	logLevel, _ := h.settingStore.GetLogLevel(ctx, h.cfg.LogLevel)
+	jwtExpiry, _ := h.settingStore.GetJWTExpiry(ctx, h.cfg.JWTExpiry)
+
 	c.JSON(http.StatusOK, types.Success(types.SettingsData{
-		AutoSubmit: autoSubmit,
+		GitLabURL:       gitlabURL,
+		GitLabToken:     crypto.MaskSecret(gitlabToken),
+		IgnorePaths:     ignorePaths,
+		MaxLineComments: maxComments,
+		AutoSubmit:      autoSubmit,
+		WebhookToken:    crypto.MaskSecret(webhookToken),
+		LogLevel:        logLevel,
+		JWTExpiry:       jwtExpiry,
 	}))
 }
 
@@ -418,16 +436,49 @@ func (h *Handler) updateSettings(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
+
+	if req.GitLabURL != nil {
+		if err := h.settingStore.SetGitLabURL(ctx, *req.GitLabURL); err != nil {
+			slog.Error("failed to set gitlab_url", "error", err)
+		}
+	}
+	if req.GitLabToken != nil && *req.GitLabToken != "" {
+		if err := h.settingStore.SetGitLabToken(ctx, *req.GitLabToken); err != nil {
+			slog.Error("failed to set gitlab_token", "error", err)
+		}
+	}
+	if req.IgnorePaths != nil {
+		if err := h.settingStore.SetIgnorePaths(ctx, req.IgnorePaths); err != nil {
+			slog.Error("failed to set ignore_paths", "error", err)
+		}
+	}
+	if req.MaxLineComments != nil {
+		if err := h.settingStore.SetMaxLineComments(ctx, *req.MaxLineComments); err != nil {
+			slog.Error("failed to set max_line_comments", "error", err)
+		}
+	}
 	if req.AutoSubmit != nil {
-		if err := h.settingStore.SetAutoSubmit(c.Request.Context(), *req.AutoSubmit); err != nil {
+		if err := h.settingStore.SetAutoSubmit(ctx, *req.AutoSubmit); err != nil {
 			slog.Error("failed to set auto_submit", "error", err)
-			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to update settings"))
-			return
+		}
+	}
+	if req.WebhookToken != nil {
+		if err := h.settingStore.SetWebhookToken(ctx, *req.WebhookToken); err != nil {
+			slog.Error("failed to set webhook_token", "error", err)
+		}
+	}
+	if req.LogLevel != nil {
+		if err := h.settingStore.SetLogLevel(ctx, *req.LogLevel); err != nil {
+			slog.Error("failed to set log_level", "error", err)
+		}
+	}
+	if req.JWTExpiry != nil {
+		if err := h.settingStore.SetJWTExpiry(ctx, *req.JWTExpiry); err != nil {
+			slog.Error("failed to set jwt_expiry", "error", err)
 		}
 	}
 
-	autoSubmit, _ := h.settingStore.GetAutoSubmit(c.Request.Context())
-	c.JSON(http.StatusOK, types.Success(types.SettingsData{
-		AutoSubmit: autoSubmit,
-	}))
+	// Return updated settings
+	h.getSettings(c)
 }

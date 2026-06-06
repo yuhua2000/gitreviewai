@@ -78,7 +78,9 @@ func GinMiddleware(secret string) gin.HandlerFunc {
 	}
 }
 
-func GinLoginHandler(password, secret string, expiry time.Duration) gin.HandlerFunc {
+// GinLoginHandler creates a login handler.
+// expiryFn is called on each login to get the current JWT expiry duration.
+func GinLoginHandler(password, secret string, expiryFn func() time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Password string `json:"password"`
@@ -93,6 +95,7 @@ func GinLoginHandler(password, secret string, expiry time.Duration) gin.HandlerF
 			return
 		}
 
+		expiry := expiryFn()
 		token, err := GenerateToken(secret, expiry)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, types.Error(types.CodeInternalError, "failed to generate token"))

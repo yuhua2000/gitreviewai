@@ -2,7 +2,7 @@
 
 # Build frontend
 build-frontend:
-	cd internal/api/frontend && npm install && npm run build
+	cd frontend && npm install && npm run build
 
 # Build Go binary (depends on frontend build)
 build-go:
@@ -13,7 +13,7 @@ build: build-frontend build-go
 
 # Development: run frontend dev server
 dev-frontend:
-	cd internal/api/frontend && npm run dev
+	cd frontend && npm run dev
 
 # Development: run Go backend
 dev-go:
@@ -21,4 +21,4 @@ dev-go:
 
 # Clean
 clean:
-	rm -rf gitreviewai internal/api/frontend/dist internal/api/frontend/node_modules data/
+	rm -rf gitreviewai frontend/dist frontend/node_modules data/

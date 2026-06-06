@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/yuhua2000/gitreviewai/frontend"
 	"github.com/yuhua2000/gitreviewai/internal/api"
 	"github.com/yuhua2000/gitreviewai/internal/config"
 	"github.com/yuhua2000/gitreviewai/internal/database"
@@ -44,15 +45,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Validate required config
-	if cfg.GitLabToken == "" {
-		slog.Error("GITLAB_TOKEN is required")
-		os.Exit(1)
-	}
-	if cfg.OpenAIAPIKey == "" {
-		slog.Error("OPENAI_API_KEY is required")
-		os.Exit(1)
-	}
+	// Validate required config (infra-level only, business config can be set via web)
 	if cfg.Password == "" {
 		slog.Error("password is required")
 		os.Exit(1)
@@ -62,10 +55,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Configure slog
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: parseLogLevel(cfg.LogLevel),
-	})))
+	// Warn if business config is missing (can be set via web UI later)
+	if cfg.GitLabToken == "" {
+		slog.Warn("gitlab_token not set, configure via web UI or config.yaml")
+	}
+	if cfg.OpenAIAPIKey == "" {
+		slog.Warn("openai_api_key not set, configure via web UI or config.yaml")
+	}
 
 	// Open database
 	db, err := database.Open(cfg.DBPath)
@@ -75,29 +71,43 @@ func main() {
 	}
 	defer db.Close()
 
+	// Read log level from DB (fallback to config), then set up slog
+	logLevelVar := new(slog.LevelVar)
+	dbLogLevel, _ := database.NewSettingStore(db).GetLogLevel(context.Background(), cfg.LogLevel)
+	logLevelVar.Set(parseLogLevel(dbLogLevel))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logLevelVar,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.String(slog.TimeKey, a.Value.Time().Format("01-02 15:04:05"))
+			}
+			return a
+		},
+	})))
+
 	// Create reviewer with DB access
 	rev := reviewer.New(cfg, db)
 
 	// Create webhook handler
-	webhookHandler := webhook.NewHandler(cfg, rev)
+	webhookHandler := webhook.NewHandler(cfg, rev, database.NewSettingStore(db))
 
 	// Create API handler
-	apiHandler := api.NewHandler(cfg, db, rev)
+	apiHandler := api.NewHandler(cfg, db, rev, frontend.FS)
 
 	// Set up gin router
-	gin.SetMode(gin.DebugMode)
+	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		slog.Info("request",
-			"status", param.StatusCode,
-			"method", param.Method,
-			"path", param.Path,
-			"query", param.Request.URL.RawQuery,
-			"ip", param.ClientIP,
-			"latency", param.Latency.String(),
-			"user_agent", param.Request.UserAgent(),
-		)
+		// slog.Info("request",
+		// 	"status", param.StatusCode,
+		// 	"method", param.Method,
+		// 	"path", param.Path,
+		// 	"query", param.Request.URL.RawQuery,
+		// 	"ip", param.ClientIP,
+		// 	"latency", param.Latency.String(),
+		// 	"user_agent", param.Request.UserAgent(),
+		// )
 		return ""
 	}))
 

@@ -1,103 +1,98 @@
+# =================================
+# GitReviewAI 配置文件
+# =================================
+# 复制为 config.yaml 并填写实际值
+# 标记 [可选] 的字段有默认值，可留空
+# 标记 [Web] 的字段支持在 Web 端「全局设置」中修改
+# 启动时 config.yaml 的值会作为初始值导入数据库，之后以数据库为准
+
 # --------------------------------
-# GitLab 配置
+# 服务配置（基础设施，仅 config.yaml）
 # --------------------------------
+# HTTP 服务端口 [可选]
+port: 8080
+
+# 登录密码（必填）
+password: "your-login-password"
+
+# JWT 签名密钥（必填，至少 32 字符）
+jwt_secret: "your-jwt-secret-key-at-least-32-chars"
+
+# JWT 过期时间 [可选] [Web]
+jwt_expiry: "24h"
+
+# 数据库文件路径 [可选]
+db_path: "./data/gitreviewai.db"
+
+# 日志级别: debug / info / warn / error [可选] [Web]
+log_level: "info"
+
+# --------------------------------
+# GitLab 配置 [Web]
+# --------------------------------
+# 首次启动时导入数据库，之后可在 Web 端修改
+# 留空则需要在 Web 端「全局设置」中配置后才能开始审查
+
 # GitLab 服务器地址
-# 私有化部署请修改为对应的地址，如 https://gitlab.company.com
 gitlab_url: "https://gitlab.com"
 
 # GitLab Personal Access Token
 # 获取方式: GitLab → User Settings → Access Tokens → Add new token
-# 需要的权限: api (访问 Merge Requests 和提交评论)
-# ⚠️ 安全提示: 请勿将真实 Token 提交到代码仓库
-gitlab_token: "glpat-your-gitlab-token-here"
+# 需要的权限: api
+gitlab_token: ""
 
-# --------------------------------
-# OpenAI / AI 模型配置
-# --------------------------------
-# API Key
-# 支持 OpenAI 或其他兼容 OpenAI API 格式的服务
-# ⚠️ 安全提示: 请勿将真实 API Key 提交到代码仓库
-openai_api_key: "sk-your-api-key-here"
-
-# 模型名称
-# 推荐: gpt-4o (效果最佳), gpt-4, gpt-3.5-turbo (成本较低)
-openai_model: "gpt-4o"
-
-# API 基础地址
-# OpenAI 官方: https://api.openai.com/v1
-# Azure OpenAI: https://your-resource.openai.azure.com/openai/deployments/your-deployment
-# 第三方代理: 根据服务商提供的地址填写
-openai_base_url: "https://api.openai.com/v1"
-
-# --------------------------------
-# 服务配置
-# --------------------------------
-# HTTP 服务端口
-# 用于接收 GitLab Webhook 请求
-port: 8080
-
-# GitLab Webhook Secret Token (可选)
+# GitLab Webhook Secret Token [可选] [Web]
 # 用于验证 Webhook 请求的合法性
 # 在 GitLab 项目 Settings → Webhooks 中设置
-webhook_token: "your-webhook-secret"
+webhook_token: ""
 
 # --------------------------------
-# 审核配置
+# AI 模型配置 [Web]
 # --------------------------------
-# 单个 MR 最大行级评论数量
-# 防止 AI 生成过多评论刷屏，建议 30-100
+# 首次启动时作为默认模型导入，之后可在 Web 端「AI 模型」中管理
+# 留空则需要在 Web 端配置 AI 模型后才能开始审查
+
+# API Key
+openai_api_key: ""
+
+# 模型名称 [可选]
+# 推荐: gpt-4o, deepseek-v3, qwen-max 等
+openai_model: "gpt-4o"
+
+# API 基础地址 [可选]
+# OpenAI: https://api.openai.com/v1
+# 百度千帆: https://qianfan.baidubce.com/v2
+# DeepSeek: https://api.deepseek.com
+openai_base_url: ""
+
+# --------------------------------
+# 审核配置 [Web]
+# --------------------------------
+# 以下配置首次启动时导入数据库，之后可在 Web 端修改
+
+# 单个 MR 最大行级评论数量 [可选] [Web]
 max_line_comments: 50
 
-# 忽略的文件/目录列表
-# 支持通配符匹配，以下文件类型会被跳过审核
+# 忽略的文件/目录列表 [Web]
+# 支持 glob 模式（如 *.pb.go）和目录前缀匹配
 ignore_paths:
-  # 版本控制
   - ".git"
-  # 依赖目录
   - "vendor"
   - "node_modules"
-  # 构建输出
   - "dist"
   - "build"
   - "target"
-  # 自动生成代码
-  - "*.pb.go"      # protobuf 生成
-  - "*.pb.gw.go"   # grpc gateway 生成
-  - "*_gen.go"     # 其他生成代码
+  - "*.pb.go"
+  - "*.pb.gw.go"
+  - "*_gen.go"
   - "generated"
-  # 配置文件（审核价值较低）
-  - "*.yaml"
-  - "*.yml"
-  - "*.json"
-  - "go.mod"
-  - "go.sum"
-  - "package-lock.json"
-  - "yarn.lock"
-  # 测试数据
   - "testdata"
   - "fixtures"
 
 # --------------------------------
-# 日志配置
+# 加密配置（可选，仅 config.yaml）
 # --------------------------------
-# 日志级别: debug / info / warn / error
-# debug: 显示所有日志，包括 AI 请求详情
-# info:  显示正常运行的关键信息
-# warn:  只显示警告和错误
-# error: 只显示错误
-log_level: "info"
-
-# --------------------------------
-# Auth 配置 (Phase 2)
-# --------------------------------
-# 登录密码（必填）
-password: "your-login-password"
-
-# JWT 签名密钥（必填，建议使用随机生成的长字符串，至少 32 字符）
-jwt_secret: "your-jwt-secret-key-at-least-32-chars"
-
-# JWT 过期时间（可选，默认 24h）
-jwt_expiry: "24h"
-
-# 数据库文件路径（可选，默认 ./data/gitreviewai.db）
-db_path: "./data/gitreviewai.db"
+# 敏感字段加密密钥（用于加密存储 Token/Key）
+# 留空则不加密（开发环境建议留空，生产环境建议设置）
+# ⚠️ 设置后不可更改，否则已加密数据无法解密
+encrypt_key: ""

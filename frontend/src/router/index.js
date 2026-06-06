@@ -16,7 +16,12 @@ const routes = [
       { path: '', name: 'Home', redirect: '/mrs' },
       { path: 'mrs', name: 'MRList', component: () => import('../views/MRListView.vue') },
       { path: 'mrs/:id', name: 'MRDetail', component: () => import('../views/MRDetailView.vue') },
+      { path: 'projects', name: 'Projects', component: () => import('../views/ProjectsView.vue') },
+      { path: 'projects/:id', name: 'ProjectDetail', component: () => import('../views/ProjectDetailView.vue') },
       { path: 'settings', name: 'Settings', component: () => import('../views/SettingsView.vue') },
+      { path: 'settings/general', name: 'SettingsGeneral', component: () => import('../views/SettingsGeneralView.vue') },
+      { path: 'settings/models', name: 'SettingsModels', component: () => import('../views/SettingsModelsView.vue') },
+      { path: 'settings/rules', name: 'SettingsRules', component: () => import('../views/SettingsRulesView.vue') },
     ],
   },
 ]
