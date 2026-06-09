@@ -1,9 +1,9 @@
 # Stage 1: Build frontend
 FROM node:20-alpine AS frontend-builder
-WORKDIR /app/internal/api/frontend
-COPY internal/api/frontend/package.json internal/api/frontend/package-lock.json* ./
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
-COPY internal/api/frontend/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build Go binary
@@ -12,7 +12,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go env -w GOPROXY=https://goproxy.cn,direct && go mod download
 COPY . .
-COPY --from=frontend-builder /app/internal/api/frontend/dist ./internal/api/frontend/dist
+COPY --from=frontend-builder /app/dist ./frontend/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o gitreviewai cmd/server/main.go
 
 # Stage 3: Runtime
