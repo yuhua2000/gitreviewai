@@ -68,7 +68,7 @@ jobs:
           npm run build
 
       - name: Build Go binary
-        run: CGO_ENABLED=0 go build -trimpath -o gitreviewai cmd/server/main.go
+        run: CGO_ENABLED=0 go build -trimpath -o gitreviewai
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

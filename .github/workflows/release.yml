@@ -52,7 +52,7 @@ jobs:
               output="${output}.exe"
             fi
             echo "Building ${output}..."
-            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags="-s -w" -o "dist/${output}" cmd/server/main.go
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags="-s -w -X github.com/yuhua2000/gitreviewai/cmd.version=${GITHUB_REF_NAME} -X github.com/yuhua2000/gitreviewai/cmd.commit=$(git rev-parse --short HEAD)" -o "dist/${output}" .
           done
 
       - name: Create checksums
