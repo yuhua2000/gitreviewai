@@ -21,8 +21,9 @@ make build-go
 # Run
 # First, copy config.yaml.example to config.yaml and fill in your values
 cp config.yaml.example config.yaml
-go run cmd/server/main.go
-go run cmd/server/main.go -config /path/to/config.yaml
+go run . server
+go run . server -c /path/to/config.yaml
+go run . version
 
 # Development mode (run frontend and backend separately)
 make dev-frontend  # Vite dev server on :5173
@@ -68,13 +69,26 @@ The service is a single Go binary that serves both the API and embedded Vue fron
    - `handler.go` — Route registration, serves embedded Vue SPA
    - `mr_handlers.go` — MR list, detail, comment/report submission endpoints
 
-10. **`cmd/server/main.go`** — Entrypoint. Loads config, validates required fields, opens database, creates reviewer with DB access, sets up gin router with auth middleware, registers routes, runs with graceful shutdown.
+10. **`main.go`** — Entrypoint. Calls `cmd.Execute()` to start the Cobra CLI.
+
+11. **`cmd/`** — Cobra CLI commands:
+    - `root.go` — Root command definition, registers subcommands
+    - `server.go` — `server` subcommand. Loads config, validates required fields, opens database, creates reviewer with DB access, sets up gin router with auth middleware, registers routes, runs with graceful shutdown
+    - `version.go` — `version` subcommand. Prints version and commit info (injected via ldflags at build time)
 
 **Frontend (`frontend/`):**
 
 - Vue 3 + Vite + Naive UI
 - Pages: Login, MR List, MR Detail, Settings
 - Markdown rendering with markdown-it + highlight.js
+
+### CLI Subcommands
+
+```bash
+./gitreviewai server [-c config.yaml]   # Start the HTTP server
+./gitreviewai version                    # Print version and commit
+./gitreviewai help                       # Show help
+```
 
 ### Request Flow
 

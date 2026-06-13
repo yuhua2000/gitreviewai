@@ -99,8 +99,11 @@ chmod +x gitreviewai-linux-amd64
 cp config.yaml.example config.yaml
 vi config.yaml
 
-# 运行
-./gitreviewai-linux-amd64
+# 运行服务
+./gitreviewai-linux-amd64 server
+
+# 查看版本
+./gitreviewai-linux-amd64 version
 ```
 
 > Release 中还提供了 `checksums.txt`，建议下载后校验 SHA256。
@@ -120,7 +123,10 @@ vi config.yaml
 make build
 
 # 运行服务
-./gitreviewai
+./gitreviewai server
+
+# 查看版本
+./gitreviewai version
 ```
 
 开发模式（前后端分离，支持热重载）：
@@ -150,7 +156,7 @@ docker run -d \
   -p 8080:8080 \
   -v $(pwd)/config.yaml:/app/config.yaml \
   -v $(pwd)/data:/app/data \
-  gitreviewai
+  gitreviewai server
 ```
 
 ### 使用Docker Compose（推荐）
@@ -167,6 +173,7 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./data:/app/data
+    command: ["server"]
 ```
 
 然后运行：
