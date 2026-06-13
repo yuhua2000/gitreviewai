@@ -1,8 +1,7 @@
-package main
+package cmd
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/cobra"
 
 	"github.com/yuhua2000/gitreviewai/frontend"
 	"github.com/yuhua2000/gitreviewai/internal/api"
@@ -21,6 +21,20 @@ import (
 	"github.com/yuhua2000/gitreviewai/internal/webhook"
 )
 
+var serverCmd = &cobra.Command{
+	Use:   "server",
+	Short: "Start the review server",
+	Long:  `Start the HTTP server that listens for GitLab webhooks and serves the web management interface.`,
+	RunE:  runServer,
+}
+
+var configPath string
+
+func init() {
+	serverCmd.Flags().StringVarP(&configPath, "config", "c", "config.yaml", "config file path")
+}
+
+// parseLogLevel converts a log level string to slog.Level.
 func parseLogLevel(level string) slog.Level {
 	switch level {
 	case "debug":
@@ -34,28 +48,22 @@ func parseLogLevel(level string) slog.Level {
 	}
 }
 
-func main() {
-	// Load config
-	configPath := flag.String("config", "config.yaml", "配置文件路径")
-	flag.Parse()
-
-	cfg, err := config.Load(*configPath)
+// runServer starts the HTTP server with webhook and web UI.
+func runServer(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		slog.Error("load config failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Validate required config (infra-level only, business config can be set via web)
+	// Validate required config
 	if cfg.Password == "" {
-		slog.Error("password is required")
-		os.Exit(1)
+		return fmt.Errorf("password is required")
 	}
 	if cfg.JWTSecret == "" {
-		slog.Error("jwt_secret is required")
-		os.Exit(1)
+		return fmt.Errorf("jwt_secret is required")
 	}
 
-	// Warn if business config is missing (can be set via web UI later)
+	// Warn if business config is missing
 	if cfg.GitLabToken == "" {
 		slog.Warn("gitlab_token not set, configure via web UI or config.yaml")
 	}
@@ -66,12 +74,11 @@ func main() {
 	// Open database
 	db, err := database.Open(cfg.DBPath)
 	if err != nil {
-		slog.Error("failed to open database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
-	// Read log level from DB (fallback to config), then set up slog
+	// Set up log level from DB (fallback to config)
 	logLevelVar := new(slog.LevelVar)
 	dbLogLevel, _ := database.NewSettingStore(db).GetLogLevel(context.Background(), cfg.LogLevel)
 	logLevelVar.Set(parseLogLevel(dbLogLevel))
@@ -88,10 +95,8 @@ func main() {
 	// Create reviewer with DB access
 	rev := reviewer.New(cfg, db)
 
-	// Create webhook handler
+	// Create handlers
 	webhookHandler := webhook.NewHandler(cfg, rev, database.NewSettingStore(db))
-
-	// Create API handler
 	apiHandler := api.NewHandler(cfg, db, rev, frontend.FS)
 
 	// Set up gin router
@@ -111,15 +116,11 @@ func main() {
 		return ""
 	}))
 
-	// Webhook route (no auth, uses X-Gitlab-Token)
+	// Routes
 	r.POST("/webhook", gin.WrapF(webhookHandler.HandleWebhook))
-
-	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 	})
-
-	// API and frontend routes
 	apiHandler.RegisterRoutes(r)
 
 	// Create HTTP server
@@ -149,9 +150,9 @@ func main() {
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		slog.Error("server shutdown failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("server shutdown: %w", err)
 	}
 
 	slog.Info("server stopped")
+	return nil
 }
