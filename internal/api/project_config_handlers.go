@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -12,14 +13,14 @@ import (
 
 // UpdateProjectConfigRequest is the request body for updating a project config.
 type UpdateProjectConfigRequest struct {
-	AIModelID       *int64  `json:"ai_model_id"`
-	AutoSubmit      *bool   `json:"auto_submit"`
-	SkipDraft       *bool   `json:"skip_draft"`
-	TargetBranches  *string `json:"target_branches"`
-	IgnorePaths     *string `json:"ignore_paths"`
-	MaxLineComments *int    `json:"max_line_comments"`
-	CustomPrompt    *string `json:"custom_prompt"`
-	Enabled         *bool   `json:"enabled"`
+	AIModelID       *int64   `json:"ai_model_id"`
+	AutoSubmit      *bool    `json:"auto_submit"`
+	SkipDraft       *bool    `json:"skip_draft"`
+	TargetBranches  *[]string `json:"target_branches"`
+	IgnorePaths     *[]string `json:"ignore_paths"`
+	MaxLineComments *int     `json:"max_line_comments"`
+	CustomPrompt    *string  `json:"custom_prompt"`
+	Enabled         *bool    `json:"enabled"`
 }
 
 // UpdateProjectRulesRequest is the request body for batch updating rule overrides.
@@ -32,9 +33,37 @@ type UpdateProjectRulesRequest struct {
 
 // ProjectConfigDetailData is the response for getProjectConfig.
 type ProjectConfigDetailData struct {
-	ProjectConfig *types.ProjectConfig         `json:"project_config"`
+	ProjectConfig *ProjectConfigResponse       `json:"project_config"`
 	RuleOverrides []*types.ProjectRuleOverride `json:"rule_overrides"`
 	AIModel       *types.AIModel               `json:"ai_model,omitempty"`
+}
+
+// ProjectConfigResponse is the frontend-friendly version of ProjectConfig.
+type ProjectConfigResponse struct {
+	*types.ProjectConfig
+	TargetBranches []string `json:"target_branches"`
+	IgnorePaths    []string `json:"ignore_paths"`
+}
+
+// newProjectConfigResponse converts a ProjectConfig to a frontend-friendly response.
+func newProjectConfigResponse(pc *types.ProjectConfig) *ProjectConfigResponse {
+	return &ProjectConfigResponse{
+		ProjectConfig:  pc,
+		TargetBranches: parseJSONArray(pc.TargetBranches),
+		IgnorePaths:    parseJSONArray(pc.IgnorePaths),
+	}
+}
+
+// parseJSONArray parses a JSON string into a string slice, returning nil for empty/invalid input.
+func parseJSONArray(s string) []string {
+	if s == "" || s == "[]" {
+		return nil
+	}
+	var result []string
+	if err := json.Unmarshal([]byte(s), &result); err != nil {
+		return nil
+	}
+	return result
 }
 
 func (h *Handler) listProjectConfigs(c *gin.Context) {
@@ -47,9 +76,15 @@ func (h *Handler) listProjectConfigs(c *gin.Context) {
 		return
 	}
 
+	// Convert to frontend-friendly response
+	resp := make([]*ProjectConfigResponse, len(configs))
+	for i, pc := range configs {
+		resp[i] = newProjectConfigResponse(pc)
+	}
+
 	page := offset/limit + 1
 	c.JSON(http.StatusOK, types.Success(types.PaginatedData{
-		Data:     configs,
+		Data:     resp,
 		Total:    total,
 		Page:     page,
 		PageSize: limit,
@@ -81,7 +116,7 @@ func (h *Handler) getProjectConfig(c *gin.Context) {
 	}
 
 	resp := ProjectConfigDetailData{
-		ProjectConfig: pc,
+		ProjectConfig: newProjectConfigResponse(pc),
 		RuleOverrides: ruleOverrides,
 	}
 
@@ -132,10 +167,20 @@ func (h *Handler) updateProjectConfig(c *gin.Context) {
 		pc.SkipDraft = *req.SkipDraft
 	}
 	if req.TargetBranches != nil {
-		pc.TargetBranches = *req.TargetBranches
+		data, err := json.Marshal(*req.TargetBranches)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid target_branches"))
+			return
+		}
+		pc.TargetBranches = string(data)
 	}
 	if req.IgnorePaths != nil {
-		pc.IgnorePaths = *req.IgnorePaths
+		data, err := json.Marshal(*req.IgnorePaths)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, types.Error(types.CodeBadRequest, "invalid ignore_paths"))
+			return
+		}
+		pc.IgnorePaths = string(data)
 	}
 	if req.MaxLineComments != nil {
 		pc.MaxLineComments = req.MaxLineComments
@@ -153,7 +198,7 @@ func (h *Handler) updateProjectConfig(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, types.Success(pc))
+	c.JSON(http.StatusOK, types.Success(newProjectConfigResponse(pc)))
 }
 
 func (h *Handler) updateProjectRules(c *gin.Context) {
