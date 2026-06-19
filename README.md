@@ -22,6 +22,27 @@
 - **人工审核** - 支持手动审核后提交 AI 生成的评论，也支持自动提交模式
 - **数据持久化** - SQLite 存储审查记录，支持历史查询
 
+## 📸 效果展示
+
+<table>
+  <tr>
+    <td align="center"><b>行级评论（GitReviewAI 平台）</b></td>
+    <td align="center"><b>行级评论（GitLab）</b></td>
+  </tr>
+  <tr>
+    <td><img src="doc/images/commit.png" width="400" /></td>
+    <td><img src="doc/images/commit_gitlab.png" width="400" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>审查报告（GitReviewAI 平台）</b></td>
+    <td align="center"><b>审查报告（GitLab）</b></td>
+  </tr>
+  <tr>
+    <td><img src="doc/images/report.png" width="400" /></td>
+    <td><img src="doc/images/report_gitlab.png" width="400" /></td>
+  </tr>
+</table>
+
 ## 🏗️ 架构设计
 
 ```mermaid
