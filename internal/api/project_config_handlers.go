@@ -13,14 +13,14 @@ import (
 
 // UpdateProjectConfigRequest is the request body for updating a project config.
 type UpdateProjectConfigRequest struct {
-	AIModelID       *int64   `json:"ai_model_id"`
-	AutoSubmit      *bool    `json:"auto_submit"`
-	SkipDraft       *bool    `json:"skip_draft"`
+	AIModelID       *int64    `json:"ai_model_id"`
+	AutoSubmit      *bool     `json:"auto_submit"`
+	SkipDraft       *bool     `json:"skip_draft"`
 	TargetBranches  *[]string `json:"target_branches"`
 	IgnorePaths     *[]string `json:"ignore_paths"`
-	MaxLineComments *int     `json:"max_line_comments"`
-	CustomPrompt    *string  `json:"custom_prompt"`
-	Enabled         *bool    `json:"enabled"`
+	MaxLineComments *int      `json:"max_line_comments"`
+	CustomPrompt    *string   `json:"custom_prompt"`
+	Enabled         *bool     `json:"enabled"`
 }
 
 // UpdateProjectRulesRequest is the request body for batch updating rule overrides.
