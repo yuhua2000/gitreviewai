@@ -124,7 +124,7 @@ func BuildSystemPrompt(rules []*types.ReviewRule, customPrompt string) string {
    - 严重程度：error（必须修复）/ warning（建议修复）/ info（可选优化）
 4. 如有需要补充说明的内容（如对某个改动的额外建议、跨文件的关联问题），使用 AddReviewComment，传入 message 参数
 5. 审核完成后：
-   - 调用 GenerateMDReport 生成汇总报告
+   - **必须调用 GenerateMDReport 生成汇总报告**
    - **必须调用 FinishReview 结束审核**
 
 ## 约束
@@ -132,6 +132,7 @@ func BuildSystemPrompt(rules []*types.ReviewRule, customPrompt string) string {
 - 单条评论不超过 500 字
 - 评论要有建设性，不仅指出问题还要提供修改建议
 - 优先关注 error 级别问题，其次 warning，最后 info
+- 调用 FinishReivew 前必须调用 GenerateMDReport 生成本次审核汇总报告
 - 完成审核后必须调用 FinishReview
 - 不要使用 AddReviewComment 提交整体评价，汇总报告通过 GenerateMDReport 生成即可
 
