@@ -12,7 +12,7 @@
 
 ---
 
-## ⚠️ Stop Reviewing Merge Requests Manually
+## Stop Reviewing Merge Requests Manually
 
 Let AI handle your code reviews 👇
 
@@ -25,13 +25,13 @@ Let AI handle your code reviews 👇
 
 ## 📺 Demo
 
-### 🔄 How It Works
+### How It Works
 
 ```
 GitLab MR Created → Webhook Triggered → GitReviewAI Analyzes → AI Line Comments + MR Summary → Written Back to GitLab
 ```
 
-### 💬 Line Comments & Review Reports
+### Line Comments & Review Reports
 
 <table>
   <tr>
@@ -52,7 +52,7 @@ GitLab MR Created → Webhook Triggered → GitReviewAI Analyzes → AI Line Com
   </tr>
 </table>
 
-### 🔍 Review Example
+### Review Example
 
 **Input code:**
 
@@ -90,7 +90,7 @@ if user == nil {
 
 ---
 
-## ✨ Features
+## Features
 
 | Feature | Description |
 |---|---|
@@ -155,7 +155,7 @@ make build
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 Key parameters in `config.yaml`:
 
@@ -182,7 +182,7 @@ jwt_secret: "your-jwt-secret-at-least-32-chars"  # Required
 
 ---
 
-## 🔗 GitLab Webhook Setup
+## GitLab Webhook Setup
 
 1. Go to GitLab project → **Settings** → **Webhooks**
 2. URL: `http://your-server:8080/webhook`
@@ -226,7 +226,7 @@ flowchart LR
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 PRs welcome! Please:
 
@@ -236,12 +236,12 @@ PRs welcome! Please:
 
 ---
 
-## 🙌 Acknowledgements
+## Acknowledgements
 
 This project is supported by the **Xiaomi MiMo Token Program** with API token credits. Special thanks!
 
 ---
 
-## 📄 License
+## License
 
 MIT License © GitReviewAI
