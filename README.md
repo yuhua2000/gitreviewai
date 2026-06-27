@@ -1,41 +1,50 @@
-# GitReviewAI 🚀
+# 🚀 GitReviewAI
+
+> **AI-powered code review for GitLab Merge Requests**
+>
+> Line-level comments • MR summary reports • Self-hosted • OpenAI-compatible
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://www.docker.com/)
 
-基于 AI 的 GitLab Merge Request 代码审查工具。
+[中文文档](README_CN.md) · [🚀 Quick Start](#-quick-start-in-30-seconds) · [📺 Demo](#-demo)
 
-## 🙌 致谢
+---
 
-本项目开发得到了 **小米 MiMo Token 计划** 提供的 API Token 支持，特此感谢！
+## ⚠️ Stop Reviewing Merge Requests Manually
 
-## 📋 功能特性
+Let AI handle your code reviews 👇
 
-- **AI 智能代码审查** - 使用 OpenAI/GPT 模型自动分析 MR 代码变更
-- **行级评论** - 精准地在代码行上标注问题并提供建议
-- **文件过滤** - 自动跳过测试、配置和生成的代码文件
-- **批量处理** - 分批处理大文件集，避免超出模型上下文限制
-- **Markdown 报告** - 生成结构化的审查总结报告
-- **Webhook 集成** - 通过 GitLab Webhook 自动触发审查
-- **Web 管理界面** - Vue 3 前端，查看和管理 AI 生成的评论与报告
-- **人工审核** - 支持手动审核后提交 AI 生成的评论，也支持自动提交模式
-- **数据持久化** - SQLite 存储审查记录，支持历史查询
+- ✅ Automatically analyze GitLab MRs, comment on every line
+- ✅ Generate structured review reports, write back to GitLab
+- ✅ Self-hosted — your data stays with you
+- ✅ Works with any OpenAI-compatible API (OpenAI / DeepSeek / Ollama / vLLM, etc.)
 
-## 📸 效果展示
+---
+
+## 📺 Demo
+
+### 🔄 How It Works
+
+```
+GitLab MR Created → Webhook Triggered → GitReviewAI Analyzes → AI Line Comments + MR Summary → Written Back to GitLab
+```
+
+### 💬 Line Comments & Review Reports
 
 <table>
   <tr>
-    <td align="center"><b>行级评论（GitReviewAI 平台）</b></td>
-    <td align="center"><b>行级评论（GitLab）</b></td>
+    <td align="center"><b>Line Comments (GitReviewAI Dashboard)</b></td>
+    <td align="center"><b>Line Comments (GitLab)</b></td>
   </tr>
   <tr>
     <td><img src="doc/images/commit.png" width="400" /></td>
     <td><img src="doc/images/commit_gitlab.png" width="400" /></td>
   </tr>
   <tr>
-    <td align="center"><b>审查报告（GitReviewAI 平台）</b></td>
-    <td align="center"><b>审查报告（GitLab）</b></td>
+    <td align="center"><b>Review Report (GitReviewAI Dashboard)</b></td>
+    <td align="center"><b>Review Report (GitLab)</b></td>
   </tr>
   <tr>
     <td><img src="doc/images/report.png" width="400" /></td>
@@ -43,135 +52,69 @@
   </tr>
 </table>
 
-## 🏗️ 架构设计
+### 🔍 Review Example
 
-```mermaid
-flowchart LR
-    A[GitLab MR Event] --> B[Webhook Handler]
-    B --> C[Reviewer Engine]
-    C --> D[GitLab API]
-    C --> E[OpenAI API<br/>MiMo/GPT]
-    C --> F[(SQLite)]
-    G[Web Frontend] --> H[REST API]
-    H --> F
-    H --> D
+**Input code:**
+
+```go
+func getUser(user *User) string {
+    return user.Name
+}
 ```
 
-## 🚀 快速开始
+**AI review result:**
 
-### 1. 环境要求
+🔴 **Potential nil pointer dereference** — Runtime panic if `user == nil`.
 
-- GitLab 账号（需配置 API Token）
-- OpenAI 兼容的 API（支持自定义基础 URL）
-- 从源码构建需要：Go 1.25+、Node.js 18+
+💡 **Suggested fix:**
 
-### 2. 配置
-
-复制示例配置文件并根据你的环境修改：
-
-```bash
-cp config.yaml.example config.yaml
+```go
+if user == nil {
+    return ""
+}
 ```
 
-关键参数：
-
-```yaml
-# GitLab 配置
-gitlab_url: "https://gitlab.com"          # 私有部署请改为你的 GitLab 地址
-gitlab_token: "glpat-xxxxxxxxx"           # 需具备 api 权限
-
-# OpenAI 配置
-openai_api_key: "sk-xxxxxxxxx"            # 你的 API Key
-openai_model: "gpt-4o"                    # 使用的模型
-openai_base_url: "https://api.openai.com/v1"  # 兼容自定义网关
-
-# 服务配置
-port: 8080                                # 服务监听端口
-webhook_token: "your-webhook-secret"      # GitLab Webhook 验证密钥（可选）
-
-# Web 管理界面配置
-password: "your-login-password"           # 登录密码（必填）
-jwt_secret: "your-jwt-secret-at-least-32-chars"  # JWT 签名密钥（必填）
-```
-
-其他选项（如忽略路径、日志级别、数据库路径等）可按需调整。完整配置请参考 `config.yaml.example` 文件。
-
-### 3. 安装与启动
-
-#### 方式一：下载预编译二进制（推荐）
-
-从 [GitHub Releases](https://github.com/yuhua2000/GitReviewAI/releases) 下载对应平台的二进制文件：
-
-| 平台 | 文件名 |
-|------|--------|
-| Linux x86_64 | `gitreviewai-linux-amd64` |
-| Linux ARM64 | `gitreviewai-linux-arm64` |
-| macOS Intel | `gitreviewai-darwin-amd64` |
-| macOS Apple Silicon | `gitreviewai-darwin-arm64` |
-| Windows x86_64 | `gitreviewai-windows-amd64.exe` |
-| Windows ARM64 | `gitreviewai-windows-arm64.exe` |
-
-```bash
-# 下载（以 Linux amd64 为例，替换版本号）
-wget https://github.com/yuhua2000/GitReviewAI/releases/latest/download/gitreviewai-linux-amd64
-chmod +x gitreviewai-linux-amd64
-
-# 复制并修改配置文件
-cp config.yaml.example config.yaml
-vi config.yaml
-
-# 运行服务
-./gitreviewai-linux-amd64 server
-
-# 查看版本
-./gitreviewai-linux-amd64 version
-```
-
-> Release 中还提供了 `checksums.txt`，建议下载后校验 SHA256。
-
-#### 方式二：从源码构建
-
-```bash
-# 克隆项目
-git clone https://github.com/yuhua2000/gitreviewai.git
-cd gitreviewai
-
-# 复制并修改配置文件
-cp config.yaml.example config.yaml
-vi config.yaml
-
-# 构建前端 + 后端
-make build
-
-# 运行服务
-./gitreviewai server
-
-# 查看版本
-./gitreviewai version
-```
-
-开发模式（前后端分离，支持热重载）：
-
-```bash
-# 终端 1：启动后端
-make dev-go
-
-# 终端 2：启动前端开发服务器
-make dev-frontend
-```
 ---
 
-## 使用Docker运行
+## 🧠 Why GitReviewAI?
 
-### 构建Docker镜像
+| Feature | GitReviewAI | SaaS Tools (GitLab Duo / CodeRabbit, etc.) |
+|---|---|---|
+| 🏠 Self-hosted | ✅ | ❌ |
+| 💬 Line-level comments | ✅ | ⚠️ Partial |
+| 🔌 OpenAI-compatible (multi-model) | ✅ | ❌ |
+| 🔒 Full data control | ✅ | ❌ |
+| 🔧 Custom review rules | ✅ | ❌ |
+| 📊 Web dashboard | ✅ | ⚠️ Limited |
+| 💰 Free & open source | ✅ MIT | ❌ Per-user pricing |
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|---|---|
+| 🤖 AI Code Review | Any OpenAI-compatible API (OpenAI / DeepSeek / Ollama / vLLM, etc.) |
+| 💬 Line-level Comments | Pinpoint issues on exact code lines, written back to GitLab MR |
+| 📄 Summary Reports | Structured review reports (error / warning / suggestion levels) |
+| 🧠 Custom Rules | Built-in rules + custom rules + project-level overrides |
+| 🛡 Dual Mode | Manual review mode (approve before posting) / Auto-submit mode |
+| ⚡ Batch Processing | Auto-split large diffs to stay within model context limits |
+| 📊 History | SQLite persistence, review history & statistics |
+| 🌐 Web Dashboard | Vue 3 admin panel with JWT authentication |
+
+---
+
+## ⚡ Quick Start in 30 Seconds
+
+### Option 1: Docker (Recommended)
 
 ```bash
-docker build -t gitreviewai .
-```
+# 1. Prepare config
+cp config.yaml.example config.yaml
+vi config.yaml  # Fill in your settings
 
-### 运行容器（使用配置文件映射）
-
-```bash
+# 2. Start
 docker run -d \
   --name gitreviewai \
   -p 8080:8080 \
@@ -180,136 +123,125 @@ docker run -d \
   gitreviewai server
 ```
 
-### 使用Docker Compose（推荐）
+### Option 2: Pre-built Binary
 
-创建 `docker-compose.yml` 文件：
+Download from [GitHub Releases](https://github.com/yuhua2000/GitReviewAI/releases):
 
-```yaml
-version: '3.8'
-services:
-  gitreviewai:
-    build: .
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./config.yaml:/app/config.yaml
-      - ./data:/app/data
-    command: ["server"]
-```
-
-然后运行：
+| Platform | Filename |
+|---|---|
+| Linux x86_64 | `gitreviewai-linux-amd64` |
+| Linux ARM64 | `gitreviewai-linux-arm64` |
+| macOS Intel | `gitreviewai-darwin-amd64` |
+| macOS Apple Silicon | `gitreviewai-darwin-arm64` |
+| Windows x86_64 | `gitreviewai-windows-amd64.exe` |
+| Windows ARM64 | `gitreviewai-windows-arm64.exe` |
 
 ```bash
-docker-compose up -d
+wget https://github.com/yuhua2000/GitReviewAI/releases/latest/download/gitreviewai-linux-amd64
+chmod +x gitreviewai-linux-amd64
+cp config.yaml.example config.yaml && vi config.yaml
+./gitreviewai-linux-amd64 server
 ```
 
-### 配置文件说明
+### Option 3: Build from Source
 
-请确保您的 `config.yaml` 文件包含以下必要配置：
+```bash
+git clone https://github.com/yuhua2000/GitReviewAI.git
+cd GitReviewAI
+cp config.yaml.example config.yaml && vi config.yaml
+make build
+./gitreviewai server
+```
+
+---
+
+## 🔧 Configuration
+
+Key parameters in `config.yaml`:
 
 ```yaml
-gitlab_token: "your_gitlab_token"
-openai_api_key: "your_openai_api_key"
-password: "your_login_password"
-jwt_secret: "your_jwt_secret_at_least_32_chars"
+# GitLab
+gitlab_url: "https://gitlab.com"              # Change for self-hosted GitLab
+gitlab_token: "glpat-xxxxxxxxx"                # Requires api scope
+
+# AI Model (OpenAI-compatible)
+openai_api_key: "sk-xxxxxxxxx"
+openai_model: "gpt-4o"
+openai_base_url: "https://api.openai.com/v1"  # Replace with any compatible gateway
+
+# Server
 port: 8080
-# 其他配置项...
+webhook_token: "your-webhook-secret"           # Optional, skip validation if empty
+
+# Web Dashboard
+password: "your-login-password"                # Required
+jwt_secret: "your-jwt-secret-at-least-32-chars"  # Required
 ```
 
-服务启动后，即可在 GitLab 项目中配置 Webhook 指向 `http://你的IP:8080/webhook`。
+> See [`config.yaml.example`](config.yaml.example) for the full configuration reference.
 
 ---
 
-## GitLab Webhook 配置
+## 🔗 GitLab Webhook Setup
 
-### 1. 在GitLab中添加Webhook
+1. Go to GitLab project → **Settings** → **Webhooks**
+2. URL: `http://your-server:8080/webhook`
+3. Check ✅ **Merge requests events**
+4. Click **Add webhook** — done 🎉
 
-1. 进入您的GitLab项目页面
-2. 导航到 **Settings** → **Webhooks**
-3. 在 **URL** 字段中输入您的GitReviewAI服务地址：
-   ```
-   http://your-domain.com/webhook
-   ```
-4. 在 **Secret token** 字段中输入您在 `config.yaml` 中配置的 `webhook_token`（如果已设置）
-5. 选择触发事件：
-   - [x] **Merge requests events**
-6. 取消勾选 **Enable SSL verification**（如果使用HTTPS且证书有效）
-7. 点击 **Add webhook**
-
-### 2. 验证Webhook配置
-
-1. 添加完成后，找到刚创建的Webhook
-2. 点击 **Test** 按钮测试连接
-3. 查看 **Recent deliveries** 确认请求是否成功发送
-
-### 3. 注意事项
-
-- 确保您的GitReviewAI服务可以通过公网访问
-- 如果使用防火墙，请开放相应的端口
-- 建议使用HTTPS以保证通信安全
-- Webhook URL应指向 `/webhook` 路径
+> Health check available at `GET /health`, returns `200 OK` when the service is running.
 
 ---
 
-## 📊 审查报告示例
+## 🏗 Architecture
 
-审查完成后，AI 会在 MR 中发布结构化报告：
-
-```markdown
-# MR 审查报告
-
-**审查时间：** 2024-01-15 09:30:25  
-**行级评论数：** 12  
-**总结评论数：** 3  
-
----
-
-## 🔴 错误（必须修复）
-
-### 1. 空指针风险
-- **文件：** `internal/service/user.go:45`
-- **问题：** 在未检查 `user` 是否为 nil 的情况下访问字段
-- **建议：** 添加空值检查：`if user == nil { return nil, errors.New("user not found") }`
-
-## 🟡 警告（建议修复）
-
-### 2. 性能优化
-- **文件：** `internal/dao/order.go:128`
-- **问题：** 循环中重复创建数据库连接
-- **建议：** 将连接创建移到循环外部
-
-## 🟢 信息（可选优化）
-
-### 3. 代码规范
-- **文件：** `internal/utils/helper.go:67`
-- **建议：** 函数过长，考虑拆分为更小的函数
-
----
-*此报告由 GitReviewAI 自动生成，供开发者参考。*
+```mermaid
+flowchart LR
+    A[GitLab MR Event] --> B[Webhook Handler]
+    B --> C[Reviewer Engine]
+    C --> D[GitLab API]
+    C --> E[OpenAI-compatible API]
+    C --> F[(SQLite)]
+    G[Web Frontend] --> H[REST API]
+    H --> F
+    H --> D
 ```
 
-## 🛠️ 开发路线图
+---
 
-- [x] GitLab Webhook 集成
-- [x] AI 行级评论功能
-- [x] Markdown 报告生成
-- [x] SQLite 数据持久化
-- [x] Web 管理界面（Vue 3）
-- [x] JWT 认证登录
-- [x] 人工审核与自动提交模式
-- [x] 自定义审查规则（内置规则 + 自定义规则 + 项目级覆盖）
-- [x] 审查历史统计（审计日志 + Token 消耗 + 重试）
-- [x] 多模型支持（项目级绑定 + 全局默认）
-- [x] 业务配置 Web 化管理
-- [ ] 多语言优化
+## 🧭 Roadmap
 
-## 🤝 贡献指南
+- [x] GitLab Webhook integration
+- [x] AI line-level comments
+- [x] MR summary reports
+- [x] Web dashboard (Vue 3)
+- [x] SQLite data persistence
+- [x] JWT authentication
+- [x] Manual review / auto-submit dual mode
+- [x] Custom review rules (built-in + custom + project-level overrides)
+- [x] Multi-model support (project-level binding + global default)
+- [ ] GitHub PR support
+- [ ] Auto-fix code suggestions
+- [ ] VSCode extension
 
-欢迎提交 issue 和 PR！请确保：
-1. 代码使用 `go fmt` 格式化
-2. 添加必要的单元测试
-3. 更新相关文档
+---
 
-## 📄 许可证
+## 🤝 Contributing
 
-MIT License © 2024 GitReviewAI
+PRs welcome! Please:
+
+- Use `go fmt` for formatting
+- Add tests for new features
+- Keep changes clear and maintainable
+
+---
+
+## 🙌 Acknowledgements
+
+This project is supported by the **Xiaomi MiMo Token Program** with API token credits. Special thanks!
+
+---
+
+## 📄 License
+
+MIT License © GitReviewAI
