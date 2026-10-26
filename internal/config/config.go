@@ -18,6 +18,10 @@ type Config struct {
 	OpenAIModel   string `yaml:"openai_model"`
 	OpenAIBaseURL string `yaml:"openai_base_url"`
 
+	// 对话压缩配置（仅 config.yaml）
+	// 单次请求的输入 prompt token 数达到该阈值时压缩对话历史，0 表示禁用
+	CompressTokenThreshold int `yaml:"compress_token_threshold"`
+
 	// 服务配置
 	Port         int    `yaml:"port"`
 	WebhookToken string `yaml:"webhook_token"`
@@ -46,14 +50,15 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{
 		// 默认值
-		GitLabURL:       "https://gitlab.com",
-		OpenAIModel:     "gpt-4o",
-		Port:            8080,
-		MaxLineComments: 50,
-		IgnorePaths:     []string{".git", "vendor", "node_modules"},
-		LogLevel:        "info",
-		JWTExpiry:       "24h",
-		DBPath:          "./data/gitreviewai.db",
+		GitLabURL:              "https://gitlab.com",
+		OpenAIModel:            "gpt-4o",
+		CompressTokenThreshold: 64000,
+		Port:                   8080,
+		MaxLineComments:        50,
+		IgnorePaths:            []string{".git", "vendor", "node_modules"},
+		LogLevel:               "info",
+		JWTExpiry:              "24h",
+		DBPath:                 "./data/gitreviewai.db",
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
