@@ -48,7 +48,7 @@ The service is a single Go binary that serves both the API and embedded Vue fron
 
 2. **`internal/reviewer/reviewer.go`** — Core orchestrator. Fetches MR info and diffs via the GitLab client, filters/classifies changed files, runs the AI tool-calling loop, persists results to SQLite, and optionally auto-submits to GitLab based on settings.
 
-3. **`internal/ai/client.go`** — Wraps the OpenAI Go SDK (`openai-go`). Runs a multi-turn chat loop where the AI calls tools to gather context or produce output. Compresses conversation history (at >25 messages).
+3. **`internal/ai/client.go`** — Wraps the OpenAI Go SDK (`openai-go`). Runs a multi-turn chat loop where the AI calls tools to gather context or produce output. Compresses conversation history when the previous request's input prompt tokens reach a configurable threshold (`compress_token_threshold`, default 64000; falls back to 25 messages when the provider omits usage).
 
 4. **`internal/ai/tools.go`** — Defines the 8 tools available to the AI: `FinishReview`, `GetMoreChanges`, `AddLineComment`, `AddReviewComment`, `GenerateMDReport`, `ReadFile`, `FindInFile`, `GetURL`. Also contains the full system prompt (in Chinese).
 
@@ -106,7 +106,7 @@ GitLab Webhook POST /webhook
           → filterChanges() → filtered []MRChange
           → ai.Client.ChatWithLimit() → multi-turn AI loop:
              → AI calls tools → handleToolCall() dispatches
-             → if >25 messages, compressMessages()
+             → if prompt tokens >= compress_token_threshold, compressMessages()
           → persist comments/reports to SQLite
           → if auto_submit enabled: submit to GitLab + record note IDs
 ```

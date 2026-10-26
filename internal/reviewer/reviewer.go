@@ -202,7 +202,8 @@ func (r *Reviewer) ReviewMR(ctx context.Context, req ReviewRequest) error {
 		reviewErr = fmt.Errorf("AI API key not configured, please set it in web UI (AI Models) or config.yaml")
 		return reviewErr
 	}
-	aiClient := ai.NewClient(apiKey, modelName, baseURL)
+	aiClient := ai.NewClient(apiKey, modelName, baseURL, r.cfg.CompressTokenThreshold)
+	slog.Info("AI client initialized", "model", modelName, "compress_token_threshold", r.cfg.CompressTokenThreshold)
 
 	// 12. Build dynamic system prompt
 	systemPrompt := ai.BuildSystemPrompt(rules, projectCfg.CustomPrompt)

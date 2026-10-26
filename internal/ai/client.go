@@ -14,9 +14,10 @@ import (
 )
 
 type Client struct {
-	client openai.Client
-	model  string
-	tools  []openai.ChatCompletionToolParam
+	client                 openai.Client
+	model                  string
+	tools                  []openai.ChatCompletionToolParam
+	compressTokenThreshold int
 }
 
 // TokenUsage tracks token consumption across API calls.
@@ -26,9 +27,21 @@ type TokenUsage struct {
 	TotalTokens      int
 }
 
+// add accumulates another usage record into u.
+func (u *TokenUsage) add(other *TokenUsage) {
+	if other == nil {
+		return
+	}
+	u.PromptTokens += other.PromptTokens
+	u.CompletionTokens += other.CompletionTokens
+	u.TotalTokens += other.TotalTokens
+}
+
 type ToolCallHandler func(name string, args json.RawMessage) (string, error)
 
-func NewClient(apiKey, model, baseURL string) *Client {
+// NewClient creates an AI client. compressTokenThreshold is the input prompt token
+// count that triggers conversation compression; <= 0 disables compression.
+func NewClient(apiKey, model, baseURL string, compressTokenThreshold int) *Client {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 	}
@@ -73,9 +86,10 @@ func NewClient(apiKey, model, baseURL string) *Client {
 	}
 
 	return &Client{
-		client: openai.NewClient(opts...),
-		model:  model,
-		tools:  tools,
+		client:                 openai.NewClient(opts...),
+		model:                  model,
+		tools:                  tools,
+		compressTokenThreshold: compressTokenThreshold,
 	}
 }
 
@@ -96,24 +110,59 @@ func (c *Client) ChatWithLimit(ctx context.Context, systemPrompt string, userMes
 }
 
 const (
-	// compressThreshold is the message count threshold to trigger compression
-	compressThreshold = 25
+	// fallbackCompressMessageThreshold is used only when the API does not report usage
+	fallbackCompressMessageThreshold = 25
 )
 
 func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionMessageParamUnion, handler ToolCallHandler, maxIterations int) (string, *TokenUsage, error) {
 	var lastResponse string
 	usage := &TokenUsage{}
 
+	// 上一次成功请求的输入 prompt token 数（非累计值），用于判断压缩时机
+	var lastPromptTokens int
+	var lastUsageAvailable bool
+	var justCompressed bool
+	var compressionIneffective bool
+
 	for i := 0; i < maxIterations; i++ {
-		// 检查是否需要压缩对话历史
-		if len(messages) > compressThreshold {
-			slog.Info("conversation history too long, compressing", "count", len(messages))
-			compressed, err := c.compressMessages(ctx, messages)
-			if err != nil {
-				return lastResponse, usage, fmt.Errorf("conversation compression failed: %w", err)
+		// 检查是否需要压缩对话历史（按上一次请求的实际 prompt token 数）
+		if c.compressTokenThreshold > 0 && len(messages) > 3 {
+			tokenTrigger := lastUsageAvailable && lastPromptTokens >= c.compressTokenThreshold
+			fallbackTrigger := !lastUsageAvailable && len(messages) > fallbackCompressMessageThreshold
+
+			switch {
+			case tokenTrigger && justCompressed:
+				// 压缩后仍超阈值，说明 system prompt + 初始消息本身已超限
+				slog.Warn("prompt tokens still above threshold after compression, disabling further compression",
+					"prompt_tokens", lastPromptTokens, "threshold", c.compressTokenThreshold)
+				compressionIneffective = true
+				justCompressed = false
+			case tokenTrigger && !compressionIneffective:
+				slog.Info("prompt token threshold reached, compressing conversation",
+					"prompt_tokens", lastPromptTokens, "threshold", c.compressTokenThreshold,
+					"message_count", len(messages))
+				compressed, compressUsage, err := c.compressMessages(ctx, messages)
+				if err != nil {
+					return lastResponse, usage, fmt.Errorf("conversation compression failed: %w", err)
+				}
+				messages = compressed
+				usage.add(compressUsage)
+				justCompressed = true
+				slog.Info("compression completed", "message_count", len(messages))
+			case fallbackTrigger:
+				slog.Info("prompt usage unavailable, compressing by message count",
+					"message_count", len(messages), "threshold", fallbackCompressMessageThreshold)
+				compressed, compressUsage, err := c.compressMessages(ctx, messages)
+				if err != nil {
+					return lastResponse, usage, fmt.Errorf("conversation compression failed: %w", err)
+				}
+				messages = compressed
+				usage.add(compressUsage)
+				justCompressed = false
+				slog.Info("compression completed", "message_count", len(messages))
+			default:
+				justCompressed = false
 			}
-			messages = compressed
-			slog.Info("compression completed", "count", len(messages))
 		}
 
 		resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
@@ -129,6 +178,17 @@ func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionM
 		usage.PromptTokens += int(resp.Usage.PromptTokens)
 		usage.CompletionTokens += int(resp.Usage.CompletionTokens)
 		usage.TotalTokens += int(resp.Usage.TotalTokens)
+
+		// 记录本次请求的输入 prompt 大小，供下一轮压缩判断使用
+		promptTokens := int(resp.Usage.PromptTokens)
+		lastUsageAvailable = promptTokens > 0
+		if lastUsageAvailable {
+			lastPromptTokens = promptTokens
+		}
+		slog.Debug("chat completion usage",
+			"prompt_tokens", promptTokens,
+			"completion_tokens", int(resp.Usage.CompletionTokens),
+			"message_count", len(messages))
 
 		if len(resp.Choices) == 0 {
 			return "", usage, fmt.Errorf("no response choices")
@@ -182,9 +242,9 @@ func (c *Client) chatLoop(ctx context.Context, messages []openai.ChatCompletionM
 
 // compressMessages compresses conversation history
 // Keeps system prompt (first message), compresses all other messages into a summary
-func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCompletionMessageParamUnion) ([]openai.ChatCompletionMessageParamUnion, error) {
+func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCompletionMessageParamUnion) ([]openai.ChatCompletionMessageParamUnion, *TokenUsage, error) {
 	if len(messages) <= 3 {
-		return messages, nil
+		return messages, nil, nil
 	}
 
 	// Extract messages to compress (all except system prompt and initial user message)
@@ -226,7 +286,13 @@ func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCom
 	})
 	if err != nil {
 		slog.Error("conversation compression failed", "error", err)
-		return nil, err
+		return nil, nil, err
+	}
+
+	compressUsage := &TokenUsage{
+		PromptTokens:     int(resp.Usage.PromptTokens),
+		CompletionTokens: int(resp.Usage.CompletionTokens),
+		TotalTokens:      int(resp.Usage.TotalTokens),
 	}
 
 	summary := resp.Choices[0].Message.Content
@@ -238,7 +304,7 @@ func (c *Client) compressMessages(ctx context.Context, messages []openai.ChatCom
 		messages[1],
 		openai.UserMessage(fmt.Sprintf("[对话历史已压缩]\n\n%s\n\n请继续审核工作。", summary)),
 	}
-	return compressed, nil
+	return compressed, compressUsage, nil
 }
 
 // FormatInitialMessage formats the initial review message
